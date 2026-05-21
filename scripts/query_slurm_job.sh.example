@@ -1,0 +1,65 @@
+#!/bin/bash
+#
+# Slurm 集群作业查询脚本示例
+# 用途：根据 JobID 查询作业所在的节点和作业信息
+# 使用方法: ./query_slurm_job.sh <job_id>
+# 输出格式: JSON
+#
+# 示例输出:
+# {
+#   "node_name": "node-01.example.com",
+#   "job_info": {
+#     "cluster_id": "slurm-01",
+#     "job_id": 67890,
+#     "node_name": "node-01.example.com",
+#     "node_list": "node-01,node-02",
+#     "partition": "gpu",
+#     "job_state": "RUNNING"
+#   }
+# }
+
+set -e
+
+# 检查参数
+if [ -z "$1" ]; then
+    echo "Usage: $0 <job_id>" >&2
+    exit 1
+fi
+
+JOB_ID=$1
+
+# 示例实现：使用 squeue 命令查询作业信息
+# 实际使用时需要根据您的环境调整命令和解析逻辑
+
+# 方法1: 使用 squeue 命令
+# squeue -j ${JOB_ID} -o "%.20i %.9P %.50j %.8u %.2t %.10M %.6D %R"
+# 或者使用 scontrol show job ${JOB_ID}
+
+# 方法2: 使用 sacct 查询历史作业
+# sacct -j ${JOB_ID} -o JobID,JobName,State,ExitCode,NodeList
+
+# 示例：假设从 scontrol 获取到的数据
+# 实际实现时，请替换为真实的 slurm 命令和解析逻辑
+
+# 解析 scontrol 输出的示例（仅供参考）
+# JOB_INFO=$(scontrol show job ${JOB_ID})
+# NODE_NAME=$(echo "$JOB_INFO" | grep -oP "Nodes=\K[^ ]+")
+# JOB_STATE=$(echo "$JOB_INFO" | grep -oP "JobState=\K[^ ]+")
+# PARTITION=$(echo "$JOB_INFO" | grep -oP "Partition=\K[^ ]+")
+
+# 模拟输出（仅供示例）
+cat <<EOF
+{
+  "node_name": "node-01.example.com",
+  "job_info": {
+    "cluster_id": "slurm-01",
+    "job_id": ${JOB_ID},
+    "node_name": "node-01.example.com",
+    "node_list": "node-01,node-02",
+    "partition": "gpu",
+    "job_state": "RUNNING"
+  }
+}
+EOF
+
+exit 0

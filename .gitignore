@@ -1,0 +1,29 @@
+# 编译产物
+bin/
+
+# 测试产物
+*.test
+*.out
+coverage.out
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境变量
+.env
+.env.local
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# opencode
+.opencode/*

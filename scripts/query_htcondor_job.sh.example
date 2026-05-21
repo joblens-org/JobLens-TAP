@@ -1,0 +1,62 @@
+#!/bin/bash
+#
+# HTCondor 集群作业查询脚本示例
+# 用途：根据 JobID 查询作业所在的节点、槽位和作业信息
+# 使用方法: ./query_htcondor_job.sh <job_id>
+# 输出格式: JSON
+#
+# 示例输出:
+# {
+#   "node_name": "compute-01.example.com",
+#   "slot": "slot1@compute-01.example.com",
+#   "job_info": {
+#     "cluster_id": "htcondor-01",
+#     "job_id": 12345,
+#     "node_name": "compute-01.example.com",
+#     "slot": "slot1@compute-01.example.com",
+#     "universe": "vanilla",
+#     "cmd": "/path/to/executable",
+#     "args": "arg1 arg2",
+#     "status": "Running"
+#   }
+# }
+
+set -e
+
+# 检查参数
+if [ -z "$1" ]; then
+    echo "Usage: $0 <job_id>" >&2
+    exit 1
+fi
+
+JOB_ID=$1
+
+# 示例实现：使用 condor_q 命令查询作业信息
+# 实际使用时需要根据您的环境调整命令和解析逻辑
+
+# 模拟查询结果（实际环境中应该使用真实的 condor 命令）
+# condor_q -format "%s " Machine -format "%s " RemoteSlotID -format "%s " ClusterId -format "%s\n" JobStatus -constraint "ClusterId==${JOB_ID}"
+# 或者使用 condor_history 查询已完成的作业
+
+# 示例：假设从 condor_q 获取到的数据
+# 实际实现时，请替换为真实的 condor 命令和解析逻辑
+
+# 模拟输出（仅供示例）
+cat <<EOF
+{
+  "node_name": "compute-01.example.com",
+  "slot": "slot1@compute-01.example.com",
+  "job_info": {
+    "cluster_id": "htcondor-01",
+    "job_id": ${JOB_ID},
+    "node_name": "compute-01.example.com",
+    "slot": "slot1@compute-01.example.com",
+    "universe": "vanilla",
+    "cmd": "/path/to/executable",
+    "args": "arg1 arg2",
+    "status": "Running"
+  }
+}
+EOF
+
+exit 0

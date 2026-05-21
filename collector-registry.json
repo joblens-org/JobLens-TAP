@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "collectors": [
+    {
+      "name": "cpumem",
+      "description": "CPU和内存采集器",
+      "aliases": [
+        {"alias": "cpu",      "es_field": "data.summary.cpuPercent",     "type": "float"},
+        {"alias": "mem",      "es_field": "data.summary.mem_rss_kb",      "type": "long"},
+        {"alias": "mem_peak", "es_field": "data.summary.mem_peak_rss_kb", "type": "long"},
+        {"alias": "name",     "es_field": "data.summary.name.keyword",    "type": "keyword"}
+      ]
+    },
+    {
+      "name": "io",
+      "description": "IO采集器",
+      "aliases": [
+        {"alias": "io_bytes", "es_field": "data.summary.read_bytes", "type": "long"}
+      ]
+    },
+    {
+      "name": "net",
+      "description": "网络采集器"
+    },
+    {
+      "name": "gpu",
+      "description": "GPU采集器"
+    }
+  ],
+  "global_aliases": [
+    {"alias": "host", "es_field": "hostname.keyword", "type": "keyword"},
+    {"alias": "time", "es_field": "@timestamp",         "type": "date"}
+  ]
+}
