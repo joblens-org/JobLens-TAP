@@ -1,8 +1,9 @@
-.PHONY: build run clean test lint
+.PHONY: build run clean docker-build docker-up docker-down test lint
 
 # 变量
 BINARY_NAME=server
 BUILD_DIR=./cmd/server
+DOCKER_COMPOSE=docker-compose -f deployments/docker-compose.yml
 
 # 版本信息（Version 在 main.go 中人为维护）
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -27,6 +28,25 @@ run:
 	@echo "Cleaning..."
 	rm -rf bin/
 	go clean
+
+# Docker 构建
+docker-build:
+	@echo "Building Docker image..."
+	$(DOCKER_COMPOSE) build
+
+# Docker 启动
+docker-up:
+	@echo "Starting Docker containers..."
+	$(DOCKER_COMPOSE) up -d
+
+# Docker 停止
+docker-down:
+	@echo "Stopping Docker containers..."
+	$(DOCKER_COMPOSE) down
+
+# Docker 日志
+docker-logs:
+	$(DOCKER_COMPOSE) logs -f tap
 
 # 测试
 test:
@@ -66,6 +86,10 @@ help:
 	@echo "  build        - Build the binary"
 	@echo "  run          - Run the application locally"
 	@echo "  clean        - Clean build artifacts"
+	@echo "  docker-build - Build Docker image"
+	@echo "  docker-up    - Start Docker containers"
+	@echo "  docker-down  - Stop Docker containers"
+	@echo "  docker-logs  - View Docker logs"
 	@echo "  test         - Run tests"
 	@echo "  test-coverage- Run tests with coverage"
 	@echo "  fmt          - Format code"
