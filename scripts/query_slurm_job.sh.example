@@ -2,38 +2,31 @@
 #
 # Slurm 集群作业查询脚本示例
 # 用途：根据 JobID 查询作业所在的节点和作业信息
-# 使用方法: ./query_slurm_job.sh <job_id> <cluster_tag>
+# 使用方法: ./query_slurm_job.sh <job_id>
 # 输出格式: JSON
 #
 # 示例输出:
 # {
-#   "job_id": "67890",
-#   "nodes": ["node-01", "node-02"],
+#   "node_name": "node-01.example.com",
 #   "job_info": {
 #     "cluster_id": "slurm-01",
-#     "job_id": "67890",
-#     "node_name": "node-01",
+#     "job_id": 67890,
+#     "node_name": "node-01.example.com",
 #     "node_list": "node-01,node-02",
 #     "partition": "gpu",
 #     "job_state": "RUNNING"
 #   }
-# }
-# 
-# 错误输出示例:
-# {
-#   "error": "job not found: 99999"
 # }
 
 set -e
 
 # 检查参数
 if [ -z "$1" ]; then
-    echo "Usage: $0 <job_id> <cluster_tag>" >&2
+    echo "Usage: $0 <job_id>" >&2
     exit 1
 fi
 
 JOB_ID=$1
-CLUSTER_TAG=$2
 
 # 示例实现：使用 squeue 命令查询作业信息
 # 实际使用时需要根据您的环境调整命令和解析逻辑
@@ -57,12 +50,11 @@ CLUSTER_TAG=$2
 # 模拟输出（仅供示例）
 cat <<EOF
 {
-  "job_id": "${JOB_ID}",
-  "nodes": ["node-01", "node-02"],
+  "node_name": "node-01.example.com",
   "job_info": {
     "cluster_id": "slurm-01",
-    "job_id": "${JOB_ID}",
-    "node_name": "node-01",
+    "job_id": ${JOB_ID},
+    "node_name": "node-01.example.com",
     "node_list": "node-01,node-02",
     "partition": "gpu",
     "job_state": "RUNNING"
