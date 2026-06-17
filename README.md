@@ -1,138 +1,152 @@
 # JobLens TAP
 
-计算集群可观测性数据中台（Telemetry Access Point）
+Compute Cluster Observability Data Hub (Telemetry Access Point)
 
-> **English**: [README_EN.md](./README_EN.md)
+> **中文文档**: [README_zh.md](./README_zh.md)
 
-## 项目概述
+## Overview
 
-JobLens TAP 是一个高性能、无状态的计算集群可观测性数据查询网关，屏蔽底层多个 Elasticsearch 集群的差异，提供统一的数据查询出口。支持多集群并行查询、时序聚合、任务摘要、字段别名映射以及采集触发等功能。
+JobLens TAP is a high-performance, stateless observability data query gateway for compute clusters. It abstracts away differences between multiple underlying Elasticsearch clusters and provides a unified data query interface. Features include multi-cluster parallel queries, time-series aggregation, job summaries, field alias mapping, and collection triggering.
 
-### 核心特性
+### Key Features
 
-- **多集群透明路由**: 自动从管理 API 获取集群元数据（cluster → index 映射、端点、凭证），支持 `*` 通配和逗号分隔的多集群并行查询
-- **字段别名系统**: 通过外部注册文件（`collector-registry.json`）管理别名 → ES 字段路径映射，新增采集器和指标无需改代码，支持 SIGHUP 热重载
-- **采集器注册中心**: 内置 cpumem/io/net/gpu 采集器支持，采集器列表和索引命名规则可配置
-- **惰性 ES 连接**: 不在启动时连接 ES，首次查询时才创建客户端（双检锁保证并发安全）
-- **游标分页**: 基于 `search_after` 实现高效连续分页
-- **优雅关闭**: SIGINT/SIGTERM 优雅退出，SIGHUP 热重载采集器注册文件
-- **扁平化输出**: 去除 ES 嵌套元数据，返回纯净业务字段
+- **Multi-Cluster Transparent Routing**: Automatically fetches cluster metadata (cluster → index mapping, endpoints, credentials) from a management API. Supports `*` wildcard and comma-separated multi-cluster parallel queries.
+- **Field Alias System**: Manages alias → ES field path mappings via an external registry file (`collector-registry.json`). Adding new collectors and metrics requires no code changes. Supports SIGHUP hot-reload.
+- **Collector Registry**: Built-in support for cpumem/io/net/gpu collectors with configurable index naming patterns.
+- **Lazy ES Connections**: ES clients are created on first query, not at startup (double-checked locking for concurrency safety).
+- **Cursor-Based Pagination**: Efficient continuous pagination via `search_after`.
+- **Graceful Shutdown**: SIGINT/SIGTERM graceful exit, SIGHUP hot-reload of the collector registry file.
+- **Flattened Output**: Strips ES nested metadata, returning clean business fields.
 
-## 技术栈
+## Tech Stack
 
-- **语言**: Go 1.25
-- **Web 框架**: Gin v1.11
-- **ES 客户端**: go-elasticsearch v8
-- **配置管理**: 环境变量（caarlos0/env）
+- **Language**: Go 1.25
+- **Web Framework**: Gin v1.11
+- **ES Client**: go-elasticsearch v8
+- **Configuration**: Environment variables (caarlos0/env)
 
-## 快速开始
+## Quick Start
 
-### 环境要求
+### Prerequisites
 
 - Go 1.25+
-- Elasticsearch 集群（通过管理 API 提供集群元数据）
+- Elasticsearch cluster (cluster metadata provided via management API)
 
-### 本地开发
+### Local Development
 
 ```bash
-# 下载依赖
+# Download dependencies
 make deps
 
-# 编译
+# Build
 make build
 
-# 运行测试
+# Run tests (all tests, including tests/ and internal/)
 make test
 
-# 短测试模式（跳过 ES 集成测试）
+# Short test mode (skip ES integration tests)
 go test -v -short ./...
 
-# 本地运行
+# Run locally
 export TAP_MANAGEMENT_API_URL="https://your-management-api.example.com"
 export TAP_COLLECTOR_REGISTRY_PATH="./collector-registry.json"
 make run
 ```
 
-### Docker 构建
+### Docker Deployment
 
 ```bash
-# 构建二进制
-make build
+# Build Docker image
+make docker-build
 
-# 编译后二进制位于 bin/server
+# Start containers
+make docker-up
+
+# Stop containers
+make docker-down
+
+# View logs
+make docker-logs
 ```
 
-## API 概览
+> To build a standalone binary (no Docker), run `make build` — output is `bin/server`.
 
-所有接口统一返回 `{code, message, data, meta}` 结构。
+## API Overview
 
-### 端点列表
+All endpoints return a unified `{code, message, data, meta}` response structure.
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 服务健康检查 |
-| GET | `/ready` | 就绪探针（检查 ES 集群连接状态） |
-| GET | `/data/raw` | 原始数据查询（日志级别采样点） |
-| GET | `/data/timeseries` | 时序聚合查询（图表级别） |
-| GET | `/data/summary` | 任务摘要查询 |
-| GET | `/data/check-job` | Job 数据存在性检查（轻量级，size=0） |
-| GET | `/schema` | Schema 发现（字段与集群元数据） |
-| GET | `/skill` | Skill API 文档（供可视化管线消费） |
-| POST | `/collect` | 触发作业采集（自动查询节点信息） |
-| POST | `/collect/direct` | 直接触发采集（用户提供节点信息） |
+### Endpoints
 
-### 快速示例
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Service health check |
+| GET | `/ready` | Readiness probe (checks ES cluster connectivity) |
+| GET | `/data/raw` | Raw data query (log-level sample points) |
+| GET | `/data/timeseries` | Time-series aggregation query (chart level, single cluster only) |
+| GET | `/data/summary` | Job summary query (single cluster only) |
+| GET | `/data/check-job` | Job data existence check (lightweight, size=0) |
+| GET | `/schema` | Schema discovery (fields and cluster metadata) |
+| GET | `/skill` | Skill API documentation (for visualization pipeline) |
+| POST | `/collect` | Trigger job collection (auto-discovers node info) |
+| POST | `/collect/direct` | Direct collection trigger (user-provided node info) |
+
+### Quick Examples
 
 ```bash
-# 健康检查
+# Health check
 curl http://localhost:8080/health
 
-# 原始数据查询
+# Raw data query
 curl "http://localhost:8080/data/raw?cluster=sz01&job=172.0&from=now-1h&fields=cpu,mem"
 
-# 时序聚合查询（多指标）
+# Time-series aggregation (multi-metric, supports by=host or by=collector)
 curl "http://localhost:8080/data/timeseries?cluster=sz01&job=172.0&metric=cpu,mem&interval=1m&from=now-1h&by=host"
 
-# 任务摘要
+# Job summary
 curl "http://localhost:8080/data/summary?cluster=sz01&job=172.0"
 
-# Job 数据存在性检查
+# Job data existence check
 curl "http://localhost:8080/data/check-job?cluster_name=sz01&job_id=172.0"
 
-# Schema 发现
+# Schema discovery
 curl "http://localhost:8080/schema?cluster=sz01"
+
+# Trigger collection (multi-collector)
+curl -X POST "http://localhost:8080/collect" \
+  -H "Content-Type: application/json" \
+  -d '{"cluster_name":"sz01","cluster_tag":"sz01_tag","job_id":"172.0","collector":"cpumem,io,net"}'
 ```
 
-> 完整 API 文档参见 [API.md](./API.md)
+> See [doc/API.md](./doc/API.md) for the complete API reference, or [doc/API_zh.md](./doc/API_zh.md) for the Chinese version. See [doc/management-api.md](./doc/management-api.md) for the management API response specification.
 
-## 配置说明
+## Configuration
 
-所有配置通过环境变量加载，无需配置文件。
+All configuration is loaded via environment variables — no config files required.
 
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `TAP_PORT` | 否 | `8080` | 服务端口 |
-| `TAP_LOG_LEVEL` | 否 | `info` | 日志级别 |
-| `TAP_READ_TIMEOUT` | 否 | `30s` | HTTP 读超时 |
-| `TAP_WRITE_TIMEOUT` | 否 | `30s` | HTTP 写超时 |
-| `TAP_MANAGEMENT_API_URL` | **是** | - | 管理 API 地址，集群元数据来源（路径 `{URL}/api/clusters/scheme`） |
-| `TAP_MANAGEMENT_CACHE_TTL` | 否 | `5m` | 集群信息缓存 TTL |
-| `TAP_MAX_SIZE` | 否 | `10000` | 单次查询最大返回数 |
-| `TAP_DEFAULT_SIZE` | 否 | `100` | 单次查询默认返回数 |
-| `TAP_MAX_TIME_RANGE_DAYS` | 否 | `7` | 最大查询时间范围（天） |
-| `TAP_DEFAULT_INTERVAL` | 否 | `1m` | 时序查询默认聚合粒度 |
-| `TAP_COLLECTOR_REGISTRY_PATH` | 推荐 | - | 采集器注册文件路径（JSON），支持 SIGHUP 热重载 |
-| `TAP_DEFAULT_COLLECTORS` | 否 | `cpumem,io,net` | 默认采集器列表（仅注册文件未设置时生效，已废弃） |
-| `TAP_SERVICE_REGISTRY_URL` | 否 | - | 服务注册中心地址（采集触发用） |
-| `TAP_SERVICE_REGISTRY_TIMEOUT` | 否 | `5s` | 注册中心查询超时 |
-| `TAP_AGENT_RETRY_INITIAL_DELAY` | 否 | `500ms` | Agent 重试初始延迟 |
-| `TAP_AGENT_RETRY_MAX_ATTEMPTS` | 否 | `3` | Agent 最大重试次数 |
-| `TAP_AGENT_RETRY_MULTIPLIER` | 否 | `2.0` | Agent 重试退避因子 |
-| `TAP_SKILL_API_BASE_URL` | 否 | - | Skill API 基础 URL |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TAP_PORT` | No | `8080` | Server port |
+| `TAP_LOG_LEVEL` | No | `info` | Log level |
+| `TAP_READ_TIMEOUT` | No | `30s` | HTTP read timeout |
+| `TAP_WRITE_TIMEOUT` | No | `30s` | HTTP write timeout |
+| `TAP_MANAGEMENT_API_URL` | **Yes** | - | Management API URL for cluster metadata (path: `{URL}/api/clusters/scheme`) |
+| `TAP_MANAGEMENT_CACHE_TTL` | No | `5m` | Cluster info cache TTL |
+| `TAP_MAX_SIZE` | No | `10000` | Maximum records per query |
+| `TAP_DEFAULT_SIZE` | No | `100` | Default records per query |
+| `TAP_MAX_TIME_RANGE_DAYS` | No | `7` | Maximum time range in days |
+| `TAP_DEFAULT_INTERVAL` | No | `1m` | Default aggregation interval for timeseries |
+| `TAP_COLLECTOR_REGISTRY_PATH` | Recommended | - | Path to collector registry JSON file, supports SIGHUP hot-reload |
+| `TAP_DEFAULT_COLLECTORS` | No | `cpumem,io,net` | Default collector list (deprecated, used only when registry file is not set) |
+| `TAP_SERVICE_REGISTRY_URL` | No | - | Service registry URL (for collection triggers) |
+| `TAP_SERVICE_REGISTRY_TIMEOUT` | No | `5s` | Service registry query timeout |
+| `TAP_AGENT_RETRY_INITIAL_DELAY` | No | `500ms` | Agent retry initial delay |
+| `TAP_AGENT_RETRY_MAX_ATTEMPTS` | No | `3` | Agent max retry attempts |
+| `TAP_AGENT_RETRY_MULTIPLIER` | No | `2.0` | Agent retry backoff multiplier |
+| `TAP_SKILL_API_BASE_URL` | No | - | Skill API base URL |
 
-### 采集器注册文件
+### Collector Registry File
 
-`TAP_COLLECTOR_REGISTRY_PATH` 指向的注册文件格式如下（项目根目录提供了 `collector-registry.json` 示例）：
+The registry file pointed to by `TAP_COLLECTOR_REGISTRY_PATH` follows this format (a sample `collector-registry.json` is provided in the project root):
 
 ```json
 {
@@ -140,7 +154,7 @@ curl "http://localhost:8080/schema?cluster=sz01"
   "collectors": [
     {
       "name": "cpumem",
-      "description": "CPU和内存采集器",
+      "description": "CPU & Memory collector",
       "aliases": [
         {"alias": "cpu", "es_field": "data.summary.cpuPercent", "type": "float"},
         {"alias": "mem", "es_field": "data.summary.mem_rss_kb", "type": "long"}
@@ -154,60 +168,66 @@ curl "http://localhost:8080/schema?cluster=sz01"
 }
 ```
 
-- `collectors[].name`: 采集器名称，决定默认索引命名 `{name}_collector_{date}`
-- `collectors[].aliases`: 采集器专属字段别名映射
-- `global_aliases`: 所有采集器共享的全局别名
+- `collectors[].name`: Collector name, determines the default index naming pattern `{name}_collector_{date}`
+- `collectors[].aliases`: Collector-specific field alias mappings
+- `global_aliases`: Global aliases shared across all collectors
 
-## 项目结构
+## Project Structure
 
 ```
 JobLens-TAP/
-├── cmd/server/              # 程序入口
+├── cmd/server/              # Application entry point
 ├── internal/
-│   ├── config/              # 环境变量配置加载
-│   ├── cluster/             # 集群元数据管理器（管理 API 拉取 + 缓存）
-│   ├── handler/             # Gin HTTP 处理器
-│   ├── service/             # 业务逻辑层
-│   ├── repository/          # ES 客户端管理（惰性创建，双检锁）
-│   ├── model/               # 数据模型、采集器注册中心
-│   ├── middleware/           # Gin 中间件（Recovery → Logger → ErrorHandler）
-│   └── skill/               # Skill 接口模板
-├── tests/                   # 所有测试（外部测试包）
-├── pkg/utils/               # 预留工具包
-├── collector-registry.json  # 采集器注册文件示例
-├── Makefile                 # 构建脚本
-├── API.md                   # API 接口文档
-├── design.md                # 设计文档（仅供参考）
+│   ├── config/              # Environment-based configuration loading
+│   ├── cluster/             # Cluster metadata manager (management API fetch + cache)
+│   ├── handler/             # Gin HTTP handlers
+│   ├── service/             # Business logic layer
+│   ├── repository/          # ES client manager (lazy init, double-checked locking)
+│   ├── model/               # Data models, collector registry
+│   ├── middleware/           # Gin middleware (Recovery → Logger → ErrorHandler)
+│   └── skill/               # Skill API templates
+├── tests/                   # Black-box integration tests (package tests)
+├── pkg/utils/               # Reserved utility package
+├── collector-registry.json  # Sample collector registry file
+├── Makefile                 # Build scripts
+├── doc/                     # Documentation
+│   ├── API.md               # API reference (English)
+│   ├── API_zh.md            # API reference (Chinese)
+│   ├── management-api.md    # Management API specification (English)
+│   └── management-api_zh.md # Management API specification (Chinese)
+├── design.md                # Design documentation (reference only)
 └── README.md
 ```
 
-### 中间件链顺序（不可变更）
+### Middleware Chain Order (immutable)
 
 ```
 Recovery → Logger → ErrorHandler
 ```
 
-## 开发
+## Development
 
-### 常用命令
+### Common Commands
 
 ```bash
-make deps          # 下载依赖 + tidy
-make build         # 编译到 bin/server
+make deps          # Download dependencies + tidy
+make build         # Build to bin/server
 make run           # go run ./cmd/server
-make test          # 运行全部测试
-make test-coverage # 测试覆盖率报告
+make test          # Run all tests (tests/ + internal/)
+make test-coverage # Test coverage report
 make fmt           # go fmt ./...
 make lint          # golangci-lint run ./...
-make clean         # 清理 bin/ 和 go clean
+make clean         # Clean bin/ and go cache
 ```
 
-### 测试说明
+### Testing
 
-- 所有测试位于 `tests/` 目录，使用外部测试包（`package tests`）
-- 集成测试需要真实 ES 集群，需设置 `TEST_ES_URL`、`TEST_CLUSTER_ID`、`TEST_JOB_ID`、`TEST_ES_USERNAME`、`TEST_ES_PASSWORD` 环境变量
-- ES 不可达时 `TestMain` 静默退出（code 0），不阻塞 CI
-- 使用 `-short` 跳过集成测试
+- **Two types of tests**:
+  - `internal/**/*_test.go`: White-box unit tests, no ES dependency
+  - `tests/`: Black-box integration tests (`package tests`), requires real ES
+- Integration tests require a real ES cluster with env vars: `TEST_ES_URL`, `TEST_CLUSTER_ID`, `TEST_JOB_ID`, `TEST_ES_USERNAME`, `TEST_ES_PASSWORD`
+- When ES is unreachable, `TestMain` exits silently (code 0) without blocking CI
+- Use `-short` flag to skip integration tests
 
 ## License
 
