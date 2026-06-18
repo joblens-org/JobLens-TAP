@@ -1,6 +1,6 @@
 # JobLens TAP
 
-计算集群可观测性数据中台（Telemetry Access Point）
+计算集群可观测性数据中台（Trigger&Access Point）
 
 > **English**: [README.md](./README.md)
 

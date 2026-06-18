@@ -1,6 +1,6 @@
 # JobLens TAP
 
-Compute Cluster Observability Data Hub (Telemetry Access Point)
+Compute Cluster Observability Data Hub (Trigger&Access Point)
 
 > **中文文档**: [README_zh.md](./README_zh.md)
 
