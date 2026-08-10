@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,7 +27,22 @@ var (
 	BuildTime = "unknown"
 )
 
+// parseLogLevel 将 TAP_LOG_LEVEL 字符串映射为 slog.Level，无法识别时回退 Info
+func parseLogLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 func main() {
+	// 引导阶段先用 Info 级别，确保配置加载失败等早期日志可见
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})))
@@ -40,7 +56,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("config loaded", "port", cfg.Port)
+	// 应用配置的日志级别（TAP_LOG_LEVEL），替换引导阶段的默认 Info 级别
+	logLevel := parseLogLevel(cfg.LogLevel)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel,
+	})))
+
+	slog.Info("config loaded", "port", cfg.Port, "log_level", logLevel.String())
 
 	// 初始化集群管理器（从管理 API 拉取集群元数据）
 	clusterMgr := cluster.NewManager(cfg.ManagementAPIURL, cfg.ManagementCacheTTL)

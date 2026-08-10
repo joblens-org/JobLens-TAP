@@ -206,7 +206,7 @@ func (c *ESClient) Search(ctx context.Context, indices []string, query map[strin
 
 	resp, err := c.client.Search(opts...)
 	if err != nil {
-		slog.Debug("[Search] search request failed",
+		slog.Warn("[Search] search request failed",
 			"cluster", c.clusterName,
 			"error", err,
 			"indices", indices,
@@ -220,8 +220,9 @@ func (c *ESClient) Search(ctx context.Context, indices []string, query map[strin
 		if err := json.NewDecoder(resp.Body).Decode(&e); err != nil {
 			return nil, fmt.Errorf("parse error response: %w", err)
 		}
-		slog.Debug("[Search] search response error",
+		slog.Warn("[Search] search response error",
 			"cluster", c.clusterName,
+			"status", resp.StatusCode,
 			"error", e,
 			"indices", indices,
 		)
@@ -247,7 +248,7 @@ func (c *ESClient) Search(ctx context.Context, indices []string, query map[strin
 
 	result, parseErr := parseSearchResponse(r)
 	if parseErr != nil {
-		slog.Debug("[Search] parse response failed",
+		slog.Warn("[Search] parse response failed",
 			"cluster", c.clusterName,
 			"error", parseErr,
 		)
@@ -295,9 +296,10 @@ func (c *ESClient) Count(ctx context.Context, indices []string, query map[string
 
 	resp, err := c.client.Count(opts...)
 	if err != nil {
-		slog.Debug("[Count] count request failed",
+		slog.Warn("[Count] count request failed",
 			"cluster", c.clusterName,
 			"error", err,
+			"indices", indices,
 		)
 		return 0, fmt.Errorf("execute count: %w", err)
 	}
@@ -305,7 +307,7 @@ func (c *ESClient) Count(ctx context.Context, indices []string, query map[string
 
 	if resp.IsError() {
 		body, _ := io.ReadAll(resp.Body)
-		slog.Debug("[Count] count response error",
+		slog.Warn("[Count] count response error",
 			"cluster", c.clusterName,
 			"status", resp.StatusCode,
 			"body", string(body),

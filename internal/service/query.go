@@ -833,6 +833,8 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 	}
 
 	// 对每个 collector 执行查询
+	var totalTookMs int64
+	var totalHits int64
 	for collector, collectorMetrics := range metricsByCollector {
 		query := s.BuildMultiMetricTimeSeriesQuery(req, from, to, collectorMetrics, collector, cn, ct, jobFilters)
 
@@ -847,6 +849,8 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 			return nil, fmt.Errorf("execute search: %w", err)
 		}
 		queryTimeMs := time.Since(startTime).Milliseconds()
+		totalTookMs += queryTimeMs
+		totalHits += result.Total
 
 		slog.Debug("timeseries query executed",
 			"cluster", cn,
@@ -865,6 +869,8 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 		"job", req.Job,
 		"metrics", metrics,
 		"records", len(response.Records),
+		"total_hits", totalHits,
+		"took_ms", totalTookMs,
 	)
 
 	return response, nil
