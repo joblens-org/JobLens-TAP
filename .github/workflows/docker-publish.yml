@@ -36,6 +36,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=tag
             type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: 构建并推送 Docker 镜像
         uses: docker/build-push-action@v6
