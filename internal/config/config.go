@@ -67,18 +67,20 @@ func Load() (*Config, error) {
 		cfg.Registry = registry
 		cfg.DefaultCollectors = registry.GetCollectorNames()
 	} else {
-		// 回退：使用 TAP_DEFAULT_COLLECTORS 环境变量或内置默认值
-		if cfg.DefaultCollectorsRaw == "" {
-			cfg.DefaultCollectorsRaw = "cpumem,io,net"
-		}
-		for _, c := range strings.Split(cfg.DefaultCollectorsRaw, ",") {
-			c = strings.TrimSpace(c)
-			if c != "" {
-				cfg.DefaultCollectors = append(cfg.DefaultCollectors, c)
-			}
-		}
-		// 内置默认注册中心
+		// 回退：使用内置默认注册中心
 		cfg.Registry = model.BuildDefaultRegistry()
+
+		if cfg.DefaultCollectorsRaw != "" {
+			// 用户显式设置 TAP_DEFAULT_COLLECTORS 时尊重其取值
+			for _, c := range strings.Split(cfg.DefaultCollectorsRaw, ",") {
+				c = strings.TrimSpace(c)
+				if c != "" {
+					cfg.DefaultCollectors = append(cfg.DefaultCollectors, c)
+				}
+			}
+		} else {
+			cfg.DefaultCollectors = cfg.Registry.GetCollectorNames()
+		}
 	}
 
 	// 设置全局默认注册中心（供 model 包向后兼容包装函数使用）
