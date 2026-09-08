@@ -1054,7 +1054,7 @@ func (s *QueryService) BuildSummaryQuery(jobRaw string, collectors []string, clu
 	}
 	filters = append(filters, jobFilters...)
 
-	// 构建聚合 — 使用 data.summary.* 字段
+	// 构建聚合 — 时间/主机为通用聚合，指标聚合由注册中心 summary_agg 声明驱动
 	aggregations := map[string]any{
 		"first_seen": map[string]any{
 			"min": map[string]any{"field": "@timestamp"},
@@ -1065,22 +1065,20 @@ func (s *QueryService) BuildSummaryQuery(jobRaw string, collectors []string, clu
 		"unique_hosts": map[string]any{
 			"cardinality": map[string]any{"field": "hostname.keyword"},
 		},
-		// 跨采集器统计
-		"cpu_stats": map[string]any{
-			"extended_stats": map[string]any{
-				"field": "data.summary.cpuPercent",
-				"sigma": 2,
-			},
-		},
-		"mem_stats": map[string]any{
-			"extended_stats": map[string]any{
-				"field": "data.summary.mem_rss_kb",
-				"sigma": 2,
-			},
-		},
-		"io_bytes_stats": map[string]any{
-			"sum": map[string]any{"field": "data.summary.read_bytes"},
-		},
+	}
+	for _, fa := range s.cfg.Registry.SummaryAliases() {
+		if fa.SummaryAgg == "extended_stats" {
+			aggregations[fa.Alias+"_stats"] = map[string]any{
+				"extended_stats": map[string]any{
+					"field": fa.ESField,
+					"sigma": 2,
+				},
+			}
+		} else {
+			aggregations[fa.Alias+"_stats"] = map[string]any{
+				fa.SummaryAgg: map[string]any{"field": fa.ESField},
+			}
+		}
 	}
 
 	query := map[string]any{
@@ -1219,41 +1217,30 @@ func (s *QueryService) parseSummaryAggregation(aggs map[string]any, req *model.S
 		}
 	}
 
-	// 解析 CPU 统计
-	cpuData := make(map[string]any)
-	if cpuStats, ok := aggs["cpu_stats"].(map[string]any); ok {
-		if max, ok := cpuStats["max"].(float64); ok && max > 0 {
-			cpuData["max"] = round2(max)
+	// 解析指标统计（由注册中心 summary_agg 声明驱动）
+	for _, fa := range s.cfg.Registry.SummaryAliases() {
+		aggResult, ok := aggs[fa.Alias+"_stats"].(map[string]any)
+		if !ok {
+			continue
 		}
-		if avg, ok := cpuStats["avg"].(float64); ok && avg > 0 {
-			cpuData["avg"] = round2(avg)
-			if stdDev, ok := cpuStats["std_deviation"].(float64); ok {
-				cpuData["p99"] = round2(avg + 2*stdDev)
+		if fa.SummaryAgg == "extended_stats" {
+			data := make(map[string]any)
+			if max, ok := aggResult["max"].(float64); ok && max > 0 {
+				data["max"] = toSummaryValue(max, fa.Type)
 			}
-		}
-	}
-	if len(cpuData) > 0 {
-		response.Stats["cpu"] = cpuData
-	}
-
-	// 解析内存统计
-	memData := make(map[string]any)
-	if memStats, ok := aggs["mem_stats"].(map[string]any); ok {
-		if max, ok := memStats["max"].(float64); ok && max > 0 {
-			memData["max_kb"] = int64(max)
-		}
-		if avg, ok := memStats["avg"].(float64); ok && avg > 0 {
-			memData["avg_kb"] = int64(avg)
-		}
-	}
-	if len(memData) > 0 {
-		response.Stats["mem"] = memData
-	}
-
-	// 解析 IO 统计
-	if ioBytes, ok := aggs["io_bytes_stats"].(map[string]any); ok {
-		if value, ok := ioBytes["value"].(float64); ok && value > 0 {
-			response.Stats["io"] = map[string]any{"total_bytes": int64(value)}
+			if avg, ok := aggResult["avg"].(float64); ok && avg > 0 {
+				data["avg"] = toSummaryValue(avg, fa.Type)
+				if stdDev, ok := aggResult["std_deviation"].(float64); ok {
+					data["p99"] = round2(avg + 2*stdDev)
+				}
+			}
+			if len(data) > 0 {
+				response.Stats[fa.Alias] = data
+			}
+		} else {
+			if value, ok := aggResult["value"].(float64); ok && value > 0 {
+				response.Stats[fa.Alias] = map[string]any{"value": toSummaryValue(value, fa.Type)}
+			}
 		}
 	}
 
@@ -1274,6 +1261,14 @@ func (s *QueryService) parseSummaryAggregation(aggs map[string]any, req *model.S
 // round2 保留两位小数
 func round2(v float64) float64 {
 	return float64(int(v*100+0.5)) / 100
+}
+
+// toSummaryValue 按 alias 类型转换统计值（long 取整，其余保留两位小数）
+func toSummaryValue(v float64, aliasType string) any {
+	if aliasType == "long" {
+		return int64(v)
+	}
+	return round2(v)
 }
 
 // CheckJobExists 检查指定集群中是否存在某个 Job 的数据
