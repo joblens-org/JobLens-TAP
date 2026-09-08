@@ -311,7 +311,7 @@ func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, 
 	queryTimeMs := time.Since(startTime).Milliseconds()
 
 	// 扁平化结果
-	records := FlattenHits(result.Hits, cn, req.Flatten, fields)
+	records := FlattenHits(result.Hits, cn, req.Flatten, s.cfg.Registry)
 
 	// 构建响应
 	response := &model.RawQueryResponse{

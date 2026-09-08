@@ -5,6 +5,7 @@ import (
 
 	"github.com/joblens/tap/internal/config"
 	"github.com/joblens/tap/internal/model"
+	"github.com/joblens/tap/internal/repository"
 )
 
 // newTestQueryService 构建不依赖 ES 的查询服务（仅测试查询构建与解析逻辑）
@@ -120,4 +121,81 @@ func TestParseSummaryAggregation_ConfigDriven(t *testing.T) {
 	if resp.Time.DurationSec != 3600 {
 		t.Errorf("duration = %d, want 3600", resp.Time.DurationSec)
 	}
+}
+
+func newFlattenHit(index string, data map[string]any) repository.SearchHit {
+	return repository.SearchHit{
+		Index:  index,
+		Source: map[string]any{"hostname": "node1", "@timestamp": "2026-09-08T10:00:00Z", "data": data},
+	}
+}
+
+func TestFlattenHit_RecordFieldDriven(t *testing.T) {
+	s := newTestQueryService()
+	registry := s.cfg.Registry
+
+	t.Run("cpumem文档提取cpu/mem/name", func(t *testing.T) {
+		hit := newFlattenHit("cpumem_collector_2026.09.08", map[string]any{
+			"summary": map[string]any{"cpuPercent": 150.5, "mem_rss_kb": 4096.0, "name": "python"},
+		})
+		r := FlattenHit(hit, "sz01", true, registry)
+		if r.CPU == nil || *r.CPU != 150.5 {
+			t.Errorf("CPU = %+v", r.CPU)
+		}
+		if r.Mem == nil || *r.Mem != 4096 {
+			t.Errorf("Mem = %+v", r.Mem)
+		}
+		if r.Name == nil || *r.Name != "python" {
+			t.Errorf("Name = %+v", r.Name)
+		}
+		if r.IOBytes != nil {
+			t.Errorf("cpumem 文档不应有 IOBytes, got %d", *r.IOBytes)
+		}
+	})
+
+	t.Run("new_io_usage文档提取io_bytes", func(t *testing.T) {
+		hit := newFlattenHit("new_io_usage_collector_2026.09.08", map[string]any{
+			"job_total": map[string]any{"rchar": 8192.0, "wchar": 4096.0},
+			"processes": []any{map[string]any{"pid": 1.0, "rchar": 8192.0}},
+		})
+		r := FlattenHit(hit, "sz01", true, registry)
+		if r.IOBytes == nil || *r.IOBytes != 8192 {
+			t.Errorf("IOBytes = %+v（应由 record_field=io_bytes 从 data.job_total.rchar 提取）", r.IOBytes)
+		}
+		if r.CPU != nil {
+			t.Error("new_io_usage 文档不应有 CPU 快捷字段")
+		}
+		if _, ok := r.Fields["data.job_total.rchar"]; !ok {
+			t.Error("扁平化字段 data.job_total.rchar 缺失")
+		}
+	})
+
+	t.Run("旧io文档不再提取io_bytes", func(t *testing.T) {
+		hit := newFlattenHit("io_collector_2026.09.08", map[string]any{
+			"summary": map[string]any{"read_bytes": 2048.0},
+		})
+		r := FlattenHit(hit, "sz01", true, registry)
+		if r.IOBytes != nil {
+			t.Errorf("io_legacy 未声明 record_field，不应提取 IOBytes, got %d", *r.IOBytes)
+		}
+	})
+
+	t.Run("collector从索引名提取", func(t *testing.T) {
+		cases := []struct {
+			index string
+			want  string
+		}{
+			{"fs_metadata_collector_2026.09.08", "fs_metadata"},
+			{"new_io_usage_collector_2026.09.08", "new_io_usage"},
+			{"cpumem_collector_2026.09.08", "cpumem"},
+			{"sz01_cpumem_collector_2026.04.27", "cpumem"}, // 旧模式 {site}_{collector}
+		}
+		for _, tc := range cases {
+			hit := newFlattenHit(tc.index, map[string]any{})
+			r := FlattenHit(hit, "sz01", true, registry)
+			if r.Collector != tc.want {
+				t.Errorf("索引 %q 提取 collector = %q, want %q", tc.index, r.Collector, tc.want)
+			}
+		}
+	})
 }

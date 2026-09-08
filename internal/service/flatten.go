@@ -12,7 +12,8 @@ import (
 )
 
 // FlattenHit 将 ES 原始文档转换为扁平 Record
-func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, _ []string) *model.Record {
+// 快捷字段提取由注册中心 record_field 声明驱动
+func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry) *model.Record {
 	record := &model.Record{
 		Cluster: clusterID,
 		Fields:  make(map[string]any),
@@ -31,7 +32,7 @@ func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, _ []st
 		record.Time = v
 	}
 	if hit.Index != "" {
-		record.Collector = extractCollectorFromIndex(hit.Index)
+		record.Collector = extractCollectorFromIndex(hit.Index, registry)
 	}
 
 	// 提取 job_info
@@ -65,33 +66,43 @@ func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, _ []st
 	if data, ok := source["data"].(map[string]any); ok {
 		flattenNested("data", data, record.Fields)
 
-		// 从 data.summary 提取快捷字段
-		if summary, ok := data["summary"].(map[string]any); ok {
-			if cpu, ok := summary["cpuPercent"].(float64); ok {
-				record.CPU = &cpu
-			}
-			if mem, ok := summary["mem_rss_kb"]; ok {
-				if m, ok := toInt64Val(mem); ok {
-					record.Mem = &m
+		// 按注册中心 record_field 声明提取快捷字段
+		if registry != nil {
+			for _, fa := range registry.RecordAliases() {
+				// .keyword 是 ES mapping 的 multi-field 后缀，文档 source 中不存在
+				key := strings.TrimSuffix(fa.ESField, ".keyword")
+				raw, ok := record.Fields[key]
+				if !ok {
+					continue
 				}
-			}
-			if name, ok := summary["name"].(string); ok {
-				record.Name = &name
-			}
-		}
-		// 从 data.summary 提取 io_bytes（IO 索引）
-		if _, hasCPU := record.Fields["data.summary.cpuPercent"]; !hasCPU {
-			if summary, ok := data["summary"].(map[string]any); ok {
-				if readBytes, ok := summary["read_bytes"]; ok {
-					if m, ok := toInt64Val(readBytes); ok {
-						record.IOBytes = &m
-					}
-				}
+				applyRecordField(record, fa, raw)
 			}
 		}
 	}
 
 	return record
+}
+
+// applyRecordField 将扁平字段值按声明写入 Record 快捷字段
+func applyRecordField(record *model.Record, fa model.FieldAlias, raw any) {
+	switch fa.RecordField {
+	case "cpu":
+		if v, ok := raw.(float64); ok {
+			record.CPU = &v
+		}
+	case "mem":
+		if v, ok := toInt64Val(raw); ok {
+			record.Mem = &v
+		}
+	case "name":
+		if v, ok := raw.(string); ok {
+			record.Name = &v
+		}
+	case "io_bytes":
+		if v, ok := toInt64Val(raw); ok {
+			record.IOBytes = &v
+		}
+	}
 }
 
 // toInt64Val 将 any 转换为 int64
@@ -113,24 +124,24 @@ func toInt64(v any) (int64, bool) {
 	return toInt64Val(v)
 }
 
-// extractCollectorFromIndex 从 ES 索引名中提取 collector 名称
-// 索引格式: {collector}_collector_{date} 例如 cpumem_collector_2026.04.27
-func extractCollectorFromIndex(index string) string {
+// extractCollectorFromIndex 从 ES 索引名提取 collector 名称
+// 新模式: {collector}_collector_{date}，collector 名可含下划线（如 fs_metadata、new_io_usage）
+// 旧模式: {site}_{collector}_collector_{date}（如 sz01_cpumem_collector_2026.04.27）
+// prefix 含下划线时两种模式均有候选，通过 registry 注册名裁决
+func extractCollectorFromIndex(index string, registry *model.CollectorRegistry) string {
 	idx := strings.Index(index, "_collector_")
 	if idx == -1 {
 		return ""
 	}
 	prefix := index[:idx]
-	parts := strings.SplitN(prefix, "_", 2)
-	if len(parts) == 1 {
-		// 新模式: {collector}_collector_{date}，prefix 直接就是 collector 名
-		return parts[0]
+	if !strings.Contains(prefix, "_") {
+		return prefix
 	}
-	if len(parts) == 2 {
-		// 旧模式: {prefix}_{collector}_collector_{date}
+	parts := strings.SplitN(prefix, "_", 2)
+	if registry != nil && registry.HasCollector(parts[1]) && !registry.HasCollector(prefix) {
 		return parts[1]
 	}
-	return ""
+	return prefix
 }
 
 // flattenNested 递归扁平化嵌套结构
@@ -155,7 +166,7 @@ func flattenNested(prefix string, value any, fields map[string]any) {
 }
 
 // FlattenHits 批量扁平化 ES 响应
-func FlattenHits(hits []repository.SearchHit, clusterID string, flatten bool, fields []string) []model.Record {
+func FlattenHits(hits []repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry) []model.Record {
 	// LOG_REASON: 扁平化是数据处理的关键节点，记录命中数与期望值对比，便于发现数据截断或丢失
 	slog.Debug("[FlattenHits] flattening hits",
 		"cluster", clusterID,
@@ -164,7 +175,7 @@ func FlattenHits(hits []repository.SearchHit, clusterID string, flatten bool, fi
 
 	records := make([]model.Record, 0, len(hits))
 	for _, hit := range hits {
-		record := FlattenHit(hit, clusterID, flatten, fields)
+		record := FlattenHit(hit, clusterID, flatten, registry)
 		records = append(records, *record)
 	}
 	return records
