@@ -4,18 +4,44 @@
     {
       "name": "cpumem",
       "description": "CPU和内存采集器",
+      "agent_name": "cpumem_collector",
       "aliases": [
-        {"alias": "cpu",      "es_field": "data.summary.cpuPercent",     "type": "float"},
-        {"alias": "mem",      "es_field": "data.summary.mem_rss_kb",      "type": "long"},
+        {"alias": "cpu",      "es_field": "data.summary.cpuPercent",     "type": "float",   "summary_agg": "extended_stats", "record_field": "cpu"},
+        {"alias": "mem",      "es_field": "data.summary.mem_rss_kb",     "type": "long",    "summary_agg": "extended_stats", "record_field": "mem"},
         {"alias": "mem_peak", "es_field": "data.summary.mem_peak_rss_kb", "type": "long"},
-        {"alias": "name",     "es_field": "data.summary.name.keyword",    "type": "keyword"}
+        {"alias": "name",     "es_field": "data.summary.name.keyword",   "type": "keyword", "record_field": "name"}
       ]
     },
     {
       "name": "io",
-      "description": "IO采集器",
+      "description": "旧版IO采集器（仅历史数据查询，新作业使用 new_io_usage）",
+      "agent_name": "io_collector",
       "aliases": [
-        {"alias": "io_bytes", "es_field": "data.summary.read_bytes", "type": "long"}
+        {"alias": "io_legacy", "es_field": "data.summary.read_bytes", "type": "long", "description": "旧版io累计读字节（历史数据）"}
+      ]
+    },
+    {
+      "name": "new_io_usage",
+      "description": "新版IO采集器（eBPF job级聚合 + 延迟分布）",
+      "agent_name": "new_io_usage_collector",
+      "aliases": [
+        {"alias": "io_bytes",       "es_field": "data.job_total.rchar",       "type": "long",  "summary_agg": "sum", "record_field": "io_bytes", "description": "job累计读字节"},
+        {"alias": "io_write_bytes", "es_field": "data.job_total.wchar",       "type": "long",  "summary_agg": "sum"},
+        {"alias": "io_read_speed",  "es_field": "data.job_total.rchar_speed", "type": "float"},
+        {"alias": "io_write_speed", "es_field": "data.job_total.wchar_speed", "type": "float"},
+        {"alias": "io_read_ops",    "es_field": "data.job_total.syscr",       "type": "long"},
+        {"alias": "io_write_ops",   "es_field": "data.job_total.syscw",       "type": "long"},
+        {"alias": "file_rchar",     "es_field": "data.files.total.rchar",     "type": "long",  "nested_path": "data.files"},
+        {"alias": "proc_rchar",     "es_field": "data.processes.rchar",       "type": "long",  "nested_path": "data.processes"}
+      ]
+    },
+    {
+      "name": "fs_metadata",
+      "description": "文件系统元数据操作采集器（eBPF，含延迟分布）",
+      "agent_name": "fs_metadata_collector",
+      "aliases": [
+        {"alias": "metadata_ops",       "es_field": "data.job_metadata_ops_rate",  "type": "float", "summary_agg": "max"},
+        {"alias": "metadata_ops_total", "es_field": "data.job_metadata_ops_total", "type": "long",  "summary_agg": "sum"}
       ]
     },
     {
@@ -29,6 +55,6 @@
   ],
   "global_aliases": [
     {"alias": "host", "es_field": "hostname.keyword", "type": "keyword"},
-    {"alias": "time", "es_field": "@timestamp",         "type": "date"}
+    {"alias": "time", "es_field": "@timestamp",       "type": "date"}
   ]
 }

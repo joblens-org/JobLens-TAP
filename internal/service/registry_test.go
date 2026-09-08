@@ -24,10 +24,18 @@ func TestGroupMetricsByCollector(t *testing.T) {
 		},
 		{
 			name:    "混合采集器指标",
-			metrics: []string{"cpu", "io_bytes"},
+			metrics: []string{"cpu", "io_bytes", "metadata_ops"},
 			expected: map[string]int{
-				"cpumem": 1,
-				"io":     1,
+				"cpumem":       1,
+				"new_io_usage": 1,
+				"fs_metadata":  1,
+			},
+		},
+		{
+			name:    "旧版io别名",
+			metrics: []string{"io_legacy"},
+			expected: map[string]int{
+				"io": 1,
 			},
 		},
 		{

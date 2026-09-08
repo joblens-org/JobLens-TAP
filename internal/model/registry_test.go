@@ -87,7 +87,9 @@ func TestBuildDefaultRegistry_Aliases(t *testing.T) {
 		{"mem", "data.summary.mem_rss_kb", true},
 		{"mem_peak", "data.summary.mem_peak_rss_kb", true},
 		{"name", "data.summary.name.keyword", true},
-		{"io_bytes", "data.summary.read_bytes", true},
+		{"io_bytes", "data.job_total.rchar", true},
+		{"io_legacy", "data.summary.read_bytes", true},
+		{"metadata_ops", "data.job_metadata_ops_rate", true},
 		{"host", "hostname.keyword", true},
 		{"time", "@timestamp", true},
 		{"nonexistent", "", false},
@@ -113,9 +115,11 @@ func TestBuildDefaultRegistry_InferCollector(t *testing.T) {
 	}{
 		{"cpu", "cpumem"},
 		{"mem", "cpumem"},
-		{"io_bytes", "io"},
-		{"host", ""},  // 全局别名不属于任何采集器
-		{"time", ""},  // 全局别名不属于任何采集器
+		{"io_bytes", "new_io_usage"},
+		{"io_legacy", "io"},
+		{"metadata_ops", "fs_metadata"},
+		{"host", ""}, // 全局别名不属于任何采集器
+		{"time", ""}, // 全局别名不属于任何采集器
 		{"unknown", ""},
 	}
 
@@ -595,4 +599,191 @@ func TestRegistryConcurrency(t *testing.T) {
 
 	<-done
 	// 无 race 即通过
+}
+
+// =============================================================================
+// AgentName / SummaryAliases / RecordAliases 测试
+// =============================================================================
+
+func TestBuildDefaultRegistry_AgentName(t *testing.T) {
+	r := BuildDefaultRegistry()
+
+	cases := []struct {
+		collector string
+		want      string
+	}{
+		{"cpumem", "cpumem_collector"},
+		{"io", "io_collector"},
+		{"new_io_usage", "new_io_usage_collector"},
+		{"fs_metadata", "fs_metadata_collector"},
+		{"net", "net_collector"},
+		{"unregistered", "unregistered"}, // 未注册原样返回
+	}
+
+	for _, tc := range cases {
+		got := r.GetAgentName(tc.collector)
+		if got != tc.want {
+			t.Errorf("GetAgentName(%q) = %q, want %q", tc.collector, got, tc.want)
+		}
+	}
+}
+
+func TestLoadRegistry_AgentNameDefault(t *testing.T) {
+	jsonContent := `{
+		"version": 1,
+		"collectors": [
+			{"name": "custom", "aliases": []},
+			{"name": "with_agent", "agent_name": "agent_side_name"}
+		],
+		"global_aliases": []
+	}`
+	path := writeTempRegistry(t, jsonContent)
+	r, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("加载失败: %v", err)
+	}
+
+	if got := r.GetAgentName("custom"); got != "custom" {
+		t.Errorf("未声明 agent_name 时应默认等于 name, got %q", got)
+	}
+	if got := r.GetAgentName("with_agent"); got != "agent_side_name" {
+		t.Errorf("显式 agent_name = %q, want %q", got, "agent_side_name")
+	}
+}
+
+func TestBuildDefaultRegistry_SummaryAliases(t *testing.T) {
+	r := BuildDefaultRegistry()
+
+	summary := r.SummaryAliases()
+	got := make(map[string]string, len(summary))
+	for _, fa := range summary {
+		got[fa.Alias] = fa.SummaryAgg
+	}
+
+	cases := map[string]string{
+		"cpu":                "extended_stats",
+		"mem":                "extended_stats",
+		"io_bytes":           "sum",
+		"io_write_bytes":     "sum",
+		"metadata_ops":       "max",
+		"metadata_ops_total": "sum",
+	}
+	for alias, wantAgg := range cases {
+		if got[alias] != wantAgg {
+			t.Errorf("SummaryAliases[%q] = %q, want %q", alias, got[alias], wantAgg)
+		}
+	}
+
+	// 未声明 summary_agg 的别名不应出现
+	for _, banned := range []string{"mem_peak", "name", "io_legacy", "file_rchar"} {
+		if _, ok := got[banned]; ok {
+			t.Errorf("别名 %q 未声明 summary_agg，不应出现在 SummaryAliases", banned)
+		}
+	}
+}
+
+func TestBuildDefaultRegistry_RecordAliases(t *testing.T) {
+	r := BuildDefaultRegistry()
+
+	record := r.RecordAliases()
+	got := make(map[string]string, len(record))
+	for _, fa := range record {
+		got[fa.Alias] = fa.RecordField
+	}
+
+	cases := map[string]string{
+		"cpu":      "cpu",
+		"mem":      "mem",
+		"name":     "name",
+		"io_bytes": "io_bytes",
+	}
+	for alias, wantField := range cases {
+		if got[alias] != wantField {
+			t.Errorf("RecordAliases[%q] = %q, want %q", alias, got[alias], wantField)
+		}
+	}
+}
+
+func TestBuildDefaultRegistry_NestedPath(t *testing.T) {
+	r := BuildDefaultRegistry()
+
+	cases := map[string]string{
+		"file_rchar": "data.files",
+		"proc_rchar": "data.processes",
+	}
+	for alias, wantPath := range cases {
+		fa, ok := r.GetAliasDef(alias)
+		if !ok {
+			t.Fatalf("缺少别名 %q", alias)
+		}
+		if fa.NestedPath != wantPath {
+			t.Errorf("GetAliasDef(%q).NestedPath = %q, want %q", alias, fa.NestedPath, wantPath)
+		}
+	}
+
+	if fa, _ := r.GetAliasDef("cpu"); fa.NestedPath != "" {
+		t.Error("cpu 不应声明 nested_path")
+	}
+}
+
+func TestLoadRegistry_InvalidSummaryAgg(t *testing.T) {
+	jsonContent := `{
+		"version": 1,
+		"collectors": [
+			{"name": "x", "aliases": [{"alias": "a", "es_field": "f", "summary_agg": "median"}]}
+		],
+		"global_aliases": []
+	}`
+	path := writeTempRegistry(t, jsonContent)
+	if _, err := LoadRegistry(path); err == nil {
+		t.Error("summary_agg=median 应返回错误")
+	}
+}
+
+func TestLoadRegistry_InvalidRecordField(t *testing.T) {
+	jsonContent := `{
+		"version": 1,
+		"collectors": [
+			{"name": "x", "aliases": [{"alias": "a", "es_field": "f", "record_field": "gpu_temp"}]}
+		],
+		"global_aliases": []
+	}`
+	path := writeTempRegistry(t, jsonContent)
+	if _, err := LoadRegistry(path); err == nil {
+		t.Error("record_field=gpu_temp 应返回错误")
+	}
+}
+
+func TestReload_RebuildsDerivedAliases(t *testing.T) {
+	path := writeTempRegistry(t, validRegistryJSON())
+	r, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("初始加载失败: %v", err)
+	}
+
+	if len(r.SummaryAliases()) != 0 || len(r.RecordAliases()) != 0 {
+		t.Fatal("初始文件未声明 summary_agg/record_field，派生列表应为空")
+	}
+
+	newContent := `{
+		"version": 1,
+		"collectors": [
+			{"name": "cpumem", "aliases": [{"alias": "cpu", "es_field": "data.summary.cpuPercent", "type": "float", "summary_agg": "max", "record_field": "cpu"}]}
+		],
+		"global_aliases": []
+	}`
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		t.Fatalf("覆盖文件失败: %v", err)
+	}
+
+	if err := r.Reload(); err != nil {
+		t.Fatalf("Reload 失败: %v", err)
+	}
+
+	if summary := r.SummaryAliases(); len(summary) != 1 || summary[0].SummaryAgg != "max" {
+		t.Errorf("重载后 SummaryAliases 未刷新: %+v", summary)
+	}
+	if record := r.RecordAliases(); len(record) != 1 || record[0].RecordField != "cpu" {
+		t.Errorf("重载后 RecordAliases 未刷新: %+v", record)
+	}
 }
