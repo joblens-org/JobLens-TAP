@@ -199,3 +199,77 @@ func TestFlattenHit_RecordFieldDriven(t *testing.T) {
 		}
 	})
 }
+func TestBuildMetricAggWithNested(t *testing.T) {
+	s := newTestQueryService()
+
+	t.Run("nested别名包裹nested聚合", func(t *testing.T) {
+		agg := s.buildMetricAggWithNested("file_rchar", "sum", "data.files.total.rchar")
+		nested, ok := agg["nested"].(map[string]any)
+		if !ok || nested["path"] != "data.files" {
+			t.Fatalf("期望 nested{path: data.files}, got %+v", agg)
+		}
+		inner, ok := agg["aggs"].(map[string]any)
+		if !ok {
+			t.Fatal("缺少内层 aggs")
+		}
+		metric, ok := inner["metric"].(map[string]any)
+		if !ok {
+			t.Fatal("缺少内层 metric 聚合")
+		}
+		if sum, ok := metric["sum"].(map[string]any); !ok || sum["field"] != "data.files.total.rchar" {
+			t.Errorf("内层 sum 聚合 = %+v", metric)
+		}
+	})
+
+	t.Run("标量别名不包裹", func(t *testing.T) {
+		agg := s.buildMetricAggWithNested("cpu", "avg", "data.summary.cpuPercent")
+		if _, hasNested := agg["nested"]; hasNested {
+			t.Error("cpu 不应包裹 nested")
+		}
+		if avg, ok := agg["avg"].(map[string]any); !ok || avg["field"] != "data.summary.cpuPercent" {
+			t.Errorf("avg 聚合 = %+v", agg)
+		}
+	})
+
+	t.Run("stats聚合nested包裹", func(t *testing.T) {
+		agg := s.buildStatsAggWithNested("proc_rchar", "data.processes.rchar")
+		nested, ok := agg["nested"].(map[string]any)
+		if !ok || nested["path"] != "data.processes" {
+			t.Fatalf("期望 nested{path: data.processes}, got %+v", agg)
+		}
+	})
+}
+
+func TestExtractMetricValue_Nested(t *testing.T) {
+	s := newTestQueryService()
+
+	t.Run("nested结构解包", func(t *testing.T) {
+		bucket := map[string]any{
+			"sum_file_rchar": map[string]any{
+				"doc_count": float64(3),
+				"metric":    map[string]any{"value": 4096.0},
+			},
+		}
+		got := s.extractMetricValue(bucket, "sum_file_rchar", "file_rchar")
+		if got != 4096 {
+			t.Errorf("extractMetricValue = %v, want 4096", got)
+		}
+	})
+
+	t.Run("标量结构直接取值", func(t *testing.T) {
+		bucket := map[string]any{
+			"avg_cpu": map[string]any{"value": 3.14},
+		}
+		got := s.extractMetricValue(bucket, "avg_cpu", "cpu")
+		if got != 3.14 {
+			t.Errorf("extractMetricValue = %v, want 3.14", got)
+		}
+	})
+
+	t.Run("空bucket返回0", func(t *testing.T) {
+		got := s.extractMetricValue(map[string]any{}, "avg_cpu", "cpu")
+		if got != 0 {
+			t.Errorf("extractMetricValue = %v, want 0", got)
+		}
+	})
+}

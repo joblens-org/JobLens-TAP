@@ -544,7 +544,7 @@ func (s *QueryService) BuildMultiMetricTimeSeriesQuery(req *model.TimeSeriesRequ
 		},
 	}
 
-	// 为每个 metric 构建聚合
+	// 为每个 metric 构建聚合（声明 nested_path 的别名包裹 nested aggregation）
 	metricAggs := make(map[string]any)
 	globalStatsAggs := make(map[string]any)
 
@@ -554,12 +554,8 @@ func (s *QueryService) BuildMultiMetricTimeSeriesQuery(req *model.TimeSeriesRequ
 			esField = metric
 		}
 		aggName := req.Agg + "_" + metric
-		metricAggs[aggName] = buildMetricAgg(req.Agg, esField)
-		globalStatsAggs["stats_"+metric] = map[string]any{
-			"extended_stats": map[string]any{
-				"field": esField,
-			},
-		}
+		metricAggs[aggName] = s.buildMetricAggWithNested(metric, req.Agg, esField)
+		globalStatsAggs["stats_"+metric] = s.buildStatsAggWithNested(metric, esField)
 	}
 
 	// 根据是否有分组维度构建不同的聚合
@@ -672,7 +668,7 @@ func (s *QueryService) BuildTimeSeriesQuery(req *model.TimeSeriesRequest, from, 
 					"timeseries": map[string]any{
 						"date_histogram": dateHistAgg,
 						"aggs": map[string]any{
-							aggName: buildMetricAgg(req.Agg, esField),
+							aggName: s.buildMetricAggWithNested(req.Metric, req.Agg, esField),
 						},
 					},
 				},
@@ -683,14 +679,10 @@ func (s *QueryService) BuildTimeSeriesQuery(req *model.TimeSeriesRequest, from, 
 			"timeseries": map[string]any{
 				"date_histogram": dateHistAgg,
 				"aggs": map[string]any{
-					aggName: buildMetricAgg(req.Agg, esField),
+					aggName: s.buildMetricAggWithNested(req.Metric, req.Agg, esField),
 				},
 			},
-			"global_stats": map[string]any{
-				"extended_stats": map[string]any{
-					"field": esField,
-				},
-			},
+			"global_stats": s.buildStatsAggWithNested(req.Metric, esField),
 		}
 	}
 
@@ -739,6 +731,58 @@ func buildMetricAgg(aggType, field string) map[string]any {
 			},
 		}
 	}
+}
+
+// buildMetricAggWithNested 构建指标聚合；别名声明 nested_path 时包裹 nested aggregation
+// （ES 返回结构相应变为 {doc_count, metric: {...}}，解析侧由 extractMetricValue 处理）
+func (s *QueryService) buildMetricAggWithNested(metric, aggType, esField string) map[string]any {
+	inner := buildMetricAgg(aggType, esField)
+	fa, ok := s.cfg.Registry.GetAliasDef(metric)
+	if !ok || fa.NestedPath == "" {
+		return inner
+	}
+	return map[string]any{
+		"nested": map[string]any{"path": fa.NestedPath},
+		"aggs":   map[string]any{"metric": inner},
+	}
+}
+
+// buildStatsAggWithNested 构建全局统计聚合；别名声明 nested_path 时同样包裹 nested aggregation
+func (s *QueryService) buildStatsAggWithNested(metric, esField string) map[string]any {
+	inner := map[string]any{
+		"extended_stats": map[string]any{
+			"field": esField,
+		},
+	}
+	fa, ok := s.cfg.Registry.GetAliasDef(metric)
+	if !ok || fa.NestedPath == "" {
+		return inner
+	}
+	return map[string]any{
+		"nested": map[string]any{"path": fa.NestedPath},
+		"aggs":   map[string]any{"metric": inner},
+	}
+}
+
+// extractMetricValue 从聚合 bucket 中提取指标值，兼容 nested 包裹结构
+func (s *QueryService) extractMetricValue(bucket map[string]any, aggName, metric string) float64 {
+	agg, ok := bucket[aggName].(map[string]any)
+	if !ok {
+		return 0
+	}
+	agg = s.unwrapNestedAgg(agg, metric)
+	v, _ := agg["value"].(float64)
+	return v
+}
+
+// unwrapNestedAgg 解开 nested aggregation 的 {doc_count, metric: {...}} 包装
+func (s *QueryService) unwrapNestedAgg(agg map[string]any, metric string) map[string]any {
+	if fa, ok := s.cfg.Registry.GetAliasDef(metric); ok && fa.NestedPath != "" {
+		if inner, ok := agg["metric"].(map[string]any); ok {
+			return inner
+		}
+	}
+	return agg
 }
 
 // getGroupByField 获取分组字段
@@ -886,11 +930,12 @@ func (s *QueryService) parseMultiMetricAggregation(aggs map[string]any, req *mod
 	for _, metric := range metrics {
 		statsKey := "stats_" + metric
 		if globalStats, ok := aggs[statsKey].(map[string]any); ok {
+			inner := s.unwrapNestedAgg(globalStats, metric)
 			stats := &model.TimeSeriesStats{}
-			if max, ok := globalStats["max"].(float64); ok {
+			if max, ok := inner["max"].(float64); ok {
 				stats.GlobalMax = max
 			}
-			if avg, ok := globalStats["avg"].(float64); ok {
+			if avg, ok := inner["avg"].(float64); ok {
 				stats.GlobalAvg = avg
 			}
 			response.Stats[metric] = stats
@@ -929,12 +974,7 @@ func (s *QueryService) parseMultiMetricAggregation(aggs map[string]any, req *mod
 							// 为每个 metric 产生一条 record
 							for _, metric := range metrics {
 								aggName := req.Agg + "_" + metric
-								var value float64
-								if metricAgg, ok := tsBucket[aggName].(map[string]any); ok {
-									if v, ok := metricAgg["value"].(float64); ok {
-										value = v
-									}
-								}
+								value := s.extractMetricValue(tsBucket, aggName, metric)
 
 								response.Records = append(response.Records, model.TimeSeriesRecord{
 									Metric:    metric,
@@ -966,12 +1006,7 @@ func (s *QueryService) parseMultiMetricAggregation(aggs map[string]any, req *mod
 					// 为每个 metric 产生一条 record
 					for _, metric := range metrics {
 						aggName := req.Agg + "_" + metric
-						var value float64
-						if metricAgg, ok := bucket[aggName].(map[string]any); ok {
-							if v, ok := metricAgg["value"].(float64); ok {
-								value = v
-							}
-						}
+						value := s.extractMetricValue(bucket, aggName, metric)
 
 						response.Records = append(response.Records, model.TimeSeriesRecord{
 							Metric:    metric,
