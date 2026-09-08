@@ -234,12 +234,14 @@ GET /data/raw
 | `time` | string | 时间戳 |
 | `host` | string | 主机名 |
 | `job` | any | 原生 JobID（优先返回 `job_info.NativeJobID` 字符串，旧数据 fallback 到 `JobID` 数值） |
-| `cpu` | float64 | CPU 使用率（快捷字段，来自 `data.summary.cpuPercent`） |
-| `mem` | int64 | 内存使用量 KB（快捷字段，来自 `data.summary.mem_rss_kb`） |
-| `name` | string | 进程名（快捷字段，来自 `data.summary.name.keyword`） |
-| `io_bytes` | int64 | IO 字节数（快捷字段，来自 `data.summary.read_bytes`） |
+| `cpu` | float64 | CPU 使用率（快捷字段，`cpu` 别名对应 `data.summary.cpuPercent`） |
+| `mem` | int64 | 内存使用量 KB（快捷字段，`mem` 别名对应 `data.summary.mem_rss_kb`） |
+| `name` | string | 进程名（快捷字段，`name` 别名对应 `data.summary.name.keyword`） |
+| `io_bytes` | int64 | 累计读字节数（快捷字段，`io_bytes` 别名对应 `data.job_total.rchar`，new_io_usage） |
 | `fields` | map | 扁平化后的字段集合（`flatten=true` 时返回） |
 | `data` | map | 嵌套原始数据结构（`flatten=false` 时返回） |
+
+> 快捷字段由采集器注册中心中别名的 `record_field` 声明驱动。
 
 #### 响应元信息字段
 
@@ -376,15 +378,20 @@ GET /data/summary
         "max": 98.5, "avg": 45.2, "p99": 89.0
       },
       "mem": {
-        "max_kb": 2048000, "avg_kb": 1024000
+        "max": 2048000, "avg": 1024000
       },
-      "io": {
-        "total_bytes": 1073741824
+      "io_bytes": {
+        "value": 1073741824
+      },
+      "metadata_ops": {
+        "value": 523.4
       }
     }
   }
 }
 ```
+
+> **注意**: `stats` 的 key 由采集器注册中心中别名的 `summary_agg` 声明驱动——每个声明了 `summary_agg` 的别名产生一个 `stats[别名]` 条目（`extended_stats` → `{max, avg, p99}`，`sum`/`max` 等单值聚合 → `{value}`）。**不兼容变更**: `mem` 改用 `max`/`avg`（原 `max_kb`/`avg_kb`）；原 `io.total_bytes` 由 `io_bytes.value` 取代（new_io_usage，字段 `data.job_total.rchar`）。
 
 > **注意**: `scope.hosts` 当前版本返回空数组（主机名列表暂未采集）；`scope.samples_count` 当前版本固定为 0；`scope.collectors` 返回默认采集器列表而非实际命中数据的采集器。
 
@@ -828,15 +835,29 @@ POST /collect/direct
 
 ## 字段别名映射
 
-| 别名 | ES 字段路径 | 类型 | 所属采集器 |
-|------|-------------|------|------------|
-| `cpu` | `data.summary.cpuPercent` | float | cpumem |
-| `mem` | `data.summary.mem_rss_kb` | long | cpumem |
-| `mem_peak` | `data.summary.mem_peak_rss_kb` | long | cpumem |
-| `name` | `data.summary.name.keyword` | keyword | cpumem |
-| `host` | `hostname.keyword` | keyword | (通用) |
-| `io_bytes` | `data.summary.read_bytes` | long | io |
-| `time` | `@timestamp` | date | (通用) |
+默认注册中心（随仓库的 `collector-registry.json` / 内置兜底）映射如下：
+
+| 别名 | ES 字段路径 | 类型 | 所属采集器 | 附加声明 |
+|------|-------------|------|------------|----------|
+| `cpu` | `data.summary.cpuPercent` | float | cpumem | `summary_agg=extended_stats`, `record_field=cpu` |
+| `mem` | `data.summary.mem_rss_kb` | long | cpumem | `summary_agg=extended_stats`, `record_field=mem` |
+| `mem_peak` | `data.summary.mem_peak_rss_kb` | long | cpumem | |
+| `name` | `data.summary.name.keyword` | keyword | cpumem | `record_field=name` |
+| `io_legacy` | `data.summary.read_bytes` | long | io | 仅历史数据 |
+| `io_bytes` | `data.job_total.rchar` | long | new_io_usage | `summary_agg=sum`, `record_field=io_bytes` |
+| `io_write_bytes` | `data.job_total.wchar` | long | new_io_usage | `summary_agg=sum` |
+| `io_read_speed` | `data.job_total.rchar_speed` | float | new_io_usage | |
+| `io_write_speed` | `data.job_total.wchar_speed` | float | new_io_usage | |
+| `io_read_ops` | `data.job_total.syscr` | long | new_io_usage | |
+| `io_write_ops` | `data.job_total.syscw` | long | new_io_usage | |
+| `file_rchar` | `data.files.total.rchar` | long | new_io_usage | `nested_path=data.files` |
+| `proc_rchar` | `data.processes.rchar` | long | new_io_usage | `nested_path=data.processes` |
+| `metadata_ops` | `data.job_metadata_ops_rate` | float | fs_metadata | `summary_agg=max` |
+| `metadata_ops_total` | `data.job_metadata_ops_total` | long | fs_metadata | `summary_agg=sum` |
+| `host` | `hostname.keyword` | keyword | (通用) | |
+| `time` | `@timestamp` | date | (通用) | |
+
+声明了 `nested_path` 的别名要求 ES 索引 mapping 中该路径为 `nested` 类型，时序聚合接口会自动包裹 nested aggregation。
 
 ---
 

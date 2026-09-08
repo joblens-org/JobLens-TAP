@@ -244,12 +244,14 @@ GET /data/raw
 | `time` | string | Timestamp |
 | `host` | string | Hostname |
 | `job` | any | Native JobID (prefers `job_info.NativeJobID` string; legacy data falls back to `JobID` int) |
-| `cpu` | float64 | CPU usage percentage (shortcut: `data.summary.cpuPercent`) |
-| `mem` | int64 | Memory usage KB (shortcut: `data.summary.mem_rss_kb`) |
-| `name` | string | Process name (shortcut: `data.summary.name.keyword`) |
-| `io_bytes` | int64 | IO bytes (shortcut: `data.summary.read_bytes`) |
+| `cpu` | float64 | CPU usage percentage (shortcut of `cpu` alias: `data.summary.cpuPercent`) |
+| `mem` | int64 | Memory usage KB (shortcut of `mem` alias: `data.summary.mem_rss_kb`) |
+| `name` | string | Process name (shortcut of `name` alias: `data.summary.name.keyword`) |
+| `io_bytes` | int64 | Cumulative read bytes (shortcut of `io_bytes` alias: `data.job_total.rchar`, new_io_usage) |
 | `fields` | map | Flattened field set (returned when `flatten=true`) |
 | `data` | map | Nested raw structure (returned when `flatten=false`) |
+
+> Shortcut fields are driven by the `record_field` declaration in the collector registry.
 
 #### Response Meta Fields
 
@@ -386,15 +388,20 @@ GET /data/summary
         "max": 98.5, "avg": 45.2, "p99": 89.0
       },
       "mem": {
-        "max_kb": 2048000, "avg_kb": 1024000
+        "max": 2048000, "avg": 1024000
       },
-      "io": {
-        "total_bytes": 1073741824
+      "io_bytes": {
+        "value": 1073741824
+      },
+      "metadata_ops": {
+        "value": 523.4
       }
     }
   }
 }
 ```
+
+> **Note**: `stats` keys are driven by the `summary_agg` declaration in the collector registry — every alias that declares `summary_agg` produces one `stats[alias]` entry (`extended_stats` → `{max, avg, p99}`, single-value aggregations like `sum`/`max` → `{value}`). **Breaking change**: `mem` now uses `max`/`avg` (was `max_kb`/`avg_kb`), and legacy `io.total_bytes` is replaced by `io_bytes.value` (new_io_usage, field `data.job_total.rchar`).
 
 > **Note**: `scope.hosts` currently returns an empty array (hostname list not collected yet); `scope.samples_count` is fixed at 0; `scope.collectors` returns the default collector list rather than collectors with actual data hits.
 
@@ -836,15 +843,29 @@ POST /collect/direct
 
 ## Field Alias Mapping
 
-| Alias | ES Field Path | Type | Collector |
-|-------|--------------|------|-----------|
-| `cpu` | `data.summary.cpuPercent` | float | cpumem |
-| `mem` | `data.summary.mem_rss_kb` | long | cpumem |
-| `mem_peak` | `data.summary.mem_peak_rss_kb` | long | cpumem |
-| `name` | `data.summary.name.keyword` | keyword | cpumem |
-| `host` | `hostname.keyword` | keyword | (global) |
-| `io_bytes` | `data.summary.read_bytes` | long | io |
-| `time` | `@timestamp` | date | (global) |
+The default registry (shipped `collector-registry.json` / built-in fallback) maps:
+
+| Alias | ES Field Path | Type | Collector | Extras |
+|-------|--------------|------|-----------|--------|
+| `cpu` | `data.summary.cpuPercent` | float | cpumem | `summary_agg=extended_stats`, `record_field=cpu` |
+| `mem` | `data.summary.mem_rss_kb` | long | cpumem | `summary_agg=extended_stats`, `record_field=mem` |
+| `mem_peak` | `data.summary.mem_peak_rss_kb` | long | cpumem | |
+| `name` | `data.summary.name.keyword` | keyword | cpumem | `record_field=name` |
+| `io_legacy` | `data.summary.read_bytes` | long | io | historical data only |
+| `io_bytes` | `data.job_total.rchar` | long | new_io_usage | `summary_agg=sum`, `record_field=io_bytes` |
+| `io_write_bytes` | `data.job_total.wchar` | long | new_io_usage | `summary_agg=sum` |
+| `io_read_speed` | `data.job_total.rchar_speed` | float | new_io_usage | |
+| `io_write_speed` | `data.job_total.wchar_speed` | float | new_io_usage | |
+| `io_read_ops` | `data.job_total.syscr` | long | new_io_usage | |
+| `io_write_ops` | `data.job_total.syscw` | long | new_io_usage | |
+| `file_rchar` | `data.files.total.rchar` | long | new_io_usage | `nested_path=data.files` |
+| `proc_rchar` | `data.processes.rchar` | long | new_io_usage | `nested_path=data.processes` |
+| `metadata_ops` | `data.job_metadata_ops_rate` | float | fs_metadata | `summary_agg=max` |
+| `metadata_ops_total` | `data.job_metadata_ops_total` | long | fs_metadata | `summary_agg=sum` |
+| `host` | `hostname.keyword` | keyword | (global) | |
+| `time` | `@timestamp` | date | (global) | |
+
+Aliases marked with `nested_path` require the corresponding path to be a `nested` type in the ES index mapping; the timeseries endpoint wraps them in a nested aggregation automatically.
 
 ---
 

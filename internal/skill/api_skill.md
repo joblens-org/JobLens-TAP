@@ -49,7 +49,7 @@ metadata:
 - [ ] **Step 1：提取关键参数**
   - 集群名：识别用户提及的集群（如 "htcondor01"、"slurm-prod"）。注意判断集群类型：Slurm 不使用 tag；Condor 的 tag 为 sched 名称（如 `htcondor02@htcondor02.ihep.ac.cn`），不确定时不传
   - JobID：提取原生 JobID（Condor `"172.0"`、Slurm `"67890"`）
-  - 指标名：从别名表匹配（"CPU"→`cpu`、"内存"→`mem`、"IO"→`io_bytes`）
+  - 指标名：从别名表匹配（"CPU"→`cpu`、"内存"→`mem`、"IO"→`io_bytes`、"元数据操作"→`metadata_ops`）
   - 时间范围：如"最近 1 小时"→ 计算 RFC3339 时间戳
   - BASE_URL：用户必须提供，否则停止并询问
 
@@ -189,7 +189,7 @@ echo "OK: jq validation passed"
 |------|------|------|
 | `cluster` | 是 | **仅单集群**（多集群 400） |
 | `job` | 是 | 原生 JobID |
-| `metric` | 是 | 指标别名，逗号分隔：`cpu,mem,name,io_bytes` |
+| `metric` | 是 | 指标别名，逗号分隔：`cpu,mem,name,io_bytes,metadata_ops` |
 | `interval` | 是 | 分桶：`10s` / `1m` / `5m` / `1h` |
 | `from` | 是 | 起始时间 |
 | `to` | 否 | 默认 `now` |
@@ -255,7 +255,12 @@ HTTP 200 = 成功（`status:success`），207 = 部分成功（`status:partial_s
 | 内存峰值 | `mem_peak` | `data.summary.mem_peak_rss_kb` | long |
 | 进程名 | `name` | `data.summary.name.keyword` | keyword |
 | 主机 | `host` | `hostname.keyword` | keyword |
-| IO / IO 字节 | `io_bytes` | `data.summary.read_bytes` | long |
+| IO / IO 字节 | `io_bytes` | `data.job_total.rchar` | long |
+| IO 写字节 | `io_write_bytes` | `data.job_total.wchar` | long |
+| IO 读速率 | `io_read_speed` | `data.job_total.rchar_speed` | float |
+| 文件级读字节 | `file_rchar` | `data.files.total.rchar` | long |
+| 元数据操作/速率 | `metadata_ops` | `data.job_metadata_ops_rate` | float |
+| 元数据操作总量 | `metadata_ops_total` | `data.job_metadata_ops_total` | long |
 | 时间 | `time` | `@timestamp` | date |
 
 > 别名由采集器注册文件管理。通过 `/schema` 可获取运行时的完整别名列表。

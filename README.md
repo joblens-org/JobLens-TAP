@@ -155,9 +155,19 @@ The registry file pointed to by `TAP_COLLECTOR_REGISTRY_PATH` follows this forma
     {
       "name": "cpumem",
       "description": "CPU & Memory collector",
+      "agent_name": "cpumem_collector",
       "aliases": [
-        {"alias": "cpu", "es_field": "data.summary.cpuPercent", "type": "float"},
-        {"alias": "mem", "es_field": "data.summary.mem_rss_kb", "type": "long"}
+        {"alias": "cpu", "es_field": "data.summary.cpuPercent", "type": "float", "summary_agg": "extended_stats", "record_field": "cpu"},
+        {"alias": "mem", "es_field": "data.summary.mem_rss_kb", "type": "long", "summary_agg": "extended_stats", "record_field": "mem"}
+      ]
+    },
+    {
+      "name": "new_io_usage",
+      "description": "New IO collector (eBPF job-level)",
+      "agent_name": "new_io_usage_collector",
+      "aliases": [
+        {"alias": "io_bytes", "es_field": "data.job_total.rchar", "type": "long", "summary_agg": "sum", "record_field": "io_bytes"},
+        {"alias": "file_rchar", "es_field": "data.files.total.rchar", "type": "long", "nested_path": "data.files"}
       ]
     }
   ],
@@ -169,8 +179,14 @@ The registry file pointed to by `TAP_COLLECTOR_REGISTRY_PATH` follows this forma
 ```
 
 - `collectors[].name`: Collector name, determines the default index naming pattern `{name}_collector_{date}`
+- `collectors[].agent_name`: Collector instance name on the node side (sent as `Lens` by `/collect`); defaults to `name`. Example: `new_io_usage` → `new_io_usage_collector`
 - `collectors[].aliases`: Collector-specific field alias mappings
+- `aliases[].summary_agg`: Optional — makes the alias participate in `/data/summary` (`extended_stats` → `{max, avg, p99}`, `sum`/`max`/`min`/`avg` → `{value}`)
+- `aliases[].record_field`: Optional — extracts the alias as a shortcut field of `/data/raw` records (`cpu`/`mem`/`name`/`io_bytes`)
+- `aliases[].nested_path`: Optional — for array fields under an ES `nested` mapping; timeseries aggregation wraps them in a nested aggregation automatically
 - `global_aliases`: Global aliases shared across all collectors
+
+Adding a new collector only requires editing this file (SIGHUP hot-reloads it) — no code changes needed.
 
 ## Project Structure
 

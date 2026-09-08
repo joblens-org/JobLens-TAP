@@ -155,9 +155,19 @@ curl -X POST "http://localhost:8080/collect" \
     {
       "name": "cpumem",
       "description": "CPU和内存采集器",
+      "agent_name": "cpumem_collector",
       "aliases": [
-        {"alias": "cpu", "es_field": "data.summary.cpuPercent", "type": "float"},
-        {"alias": "mem", "es_field": "data.summary.mem_rss_kb", "type": "long"}
+        {"alias": "cpu", "es_field": "data.summary.cpuPercent", "type": "float", "summary_agg": "extended_stats", "record_field": "cpu"},
+        {"alias": "mem", "es_field": "data.summary.mem_rss_kb", "type": "long", "summary_agg": "extended_stats", "record_field": "mem"}
+      ]
+    },
+    {
+      "name": "new_io_usage",
+      "description": "新版IO采集器（eBPF job级）",
+      "agent_name": "new_io_usage_collector",
+      "aliases": [
+        {"alias": "io_bytes", "es_field": "data.job_total.rchar", "type": "long", "summary_agg": "sum", "record_field": "io_bytes"},
+        {"alias": "file_rchar", "es_field": "data.files.total.rchar", "type": "long", "nested_path": "data.files"}
       ]
     }
   ],
@@ -169,8 +179,14 @@ curl -X POST "http://localhost:8080/collect" \
 ```
 
 - `collectors[].name`: 采集器名称，决定默认索引命名 `{name}_collector_{date}`
+- `collectors[].agent_name`: 节点侧采集器实例名（`/collect` 触发时作为 `Lens` 传递）；缺省等于 `name`。例如 `new_io_usage` → `new_io_usage_collector`
 - `collectors[].aliases`: 采集器专属字段别名映射
+- `aliases[].summary_agg`: 可选 — 声明后该别名参与 `/data/summary` 聚合（`extended_stats` → `{max, avg, p99}`，`sum`/`max`/`min`/`avg` → `{value}`）
+- `aliases[].record_field`: 可选 — 声明后该别名提取为 `/data/raw` 记录的快捷字段（`cpu`/`mem`/`name`/`io_bytes`）
+- `aliases[].nested_path`: 可选 — 面向 ES `nested` mapping 的数组字段；时序聚合接口自动包裹 nested aggregation
 - `global_aliases`: 所有采集器共享的全局别名
+
+新增采集器只需编辑本文件（支持 SIGHUP 热重载），无需改动代码。
 
 ## 项目结构
 
