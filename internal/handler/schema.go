@@ -67,6 +67,7 @@ func (h *SchemaHandler) Get(c *gin.Context) {
 			Name:         ce.Name,
 			Description:  ce.Description,
 			IndexPattern: ce.IndexPattern,
+			AgentName:    ce.AgentName,
 			Aliases:      ce.Aliases,
 		})
 	}

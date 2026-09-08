@@ -135,14 +135,21 @@ func (s *CollectionService) TriggerCollection(ctx context.Context, clusterName s
 		"nodes", nodeList,
 	)
 
-	// 解析逗号分隔的采集器列表
+	// 解析逗号分隔的采集器列表，并通过注册中心映射为节点侧实例名（agent_name）
 	rawCollectors := strings.Split(collector, ",")
 	collectors := make([]string, 0, len(rawCollectors))
 	for _, c := range rawCollectors {
 		c = strings.TrimSpace(c)
-		if c != "" {
-			collectors = append(collectors, c)
+		if c == "" {
+			continue
 		}
+		agentName := s.cfg.Registry.GetAgentName(c)
+		if agentName == c && !s.cfg.Registry.HasCollector(c) {
+			slog.Warn("[TriggerCollection] collector not in registry, passing through as-is",
+				"collector", c,
+			)
+		}
+		collectors = append(collectors, agentName)
 	}
 
 	var agentResponses []map[string]any
@@ -289,14 +296,21 @@ func (s *CollectionService) TriggerDirectCollection(ctx context.Context, req *mo
 		}
 	}
 
-	// 解析逗号分隔的采集器列表，并添加 _collector 后缀
+	// 解析逗号分隔的采集器列表，并通过注册中心映射为节点侧实例名（agent_name）
 	rawCollectors := strings.Split(req.Collector, ",")
 	collectors := make([]string, 0, len(rawCollectors))
 	for _, c := range rawCollectors {
 		c = strings.TrimSpace(c)
-		if c != "" {
-			collectors = append(collectors, c)
+		if c == "" {
+			continue
 		}
+		agentName := s.cfg.Registry.GetAgentName(c)
+		if agentName == c && !s.cfg.Registry.HasCollector(c) {
+			slog.Warn("[TriggerDirectCollection] collector not in registry, passing through as-is",
+				"collector", c,
+			)
+		}
+		collectors = append(collectors, agentName)
 	}
 
 	agentResp, err := s.agentClient.TriggerAgentCollection(

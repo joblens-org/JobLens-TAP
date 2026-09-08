@@ -120,6 +120,7 @@ type CollectorInfo struct {
 	Name         string       `json:"name"`
 	Description  string       `json:"description"`
 	IndexPattern string       `json:"index_pattern"`
+	AgentName    string       `json:"agent_name,omitempty"` // 节点侧实例名（/collect 的 Lens 传递）
 	Aliases      []FieldAlias `json:"aliases"`
 }
 
