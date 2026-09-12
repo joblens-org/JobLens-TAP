@@ -63,15 +63,21 @@ func fakeRawES(t *testing.T) *httptest.Server {
 			return
 		}
 		mu.Lock()
+		if strings.HasSuffix(r.URL.Path, "_pit") {
+			mu.Unlock()
+			w.Header().Set("X-Elastic-Product", "Elasticsearch")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "test-pit", "succeeded": true})
+			return
+		}
 		calls++
 		n := calls
 		mu.Unlock()
 		hits := []map[string]any{}
 		if n == 1 {
 			hits = []map[string]any{
-				{"_id": "a", "_index": "cpumem_collector_2026.01.01", "_score": 1, "sort": []any{"t4"},
+				{"_id": "a", "_index": "cpumem_collector_2026.01.01", "_score": 1, "sort": []any{"t4", 1},
 					"_source": map[string]any{"hostname": "h", "@timestamp": "2026-01-01T00:00:02Z", "job_info": map[string]any{"NativeJobID": "1"}, "data": map[string]any{}}},
-				{"_id": "b", "_index": "cpumem_collector_2026.01.01", "_score": 1, "sort": []any{"t3"},
+				{"_id": "b", "_index": "cpumem_collector_2026.01.01", "_score": 1, "sort": []any{"t3", 2},
 					"_source": map[string]any{"hostname": "h", "@timestamp": "2026-01-01T00:00:01Z", "job_info": map[string]any{"NativeJobID": "1"}, "data": map[string]any{}}},
 			}
 		}

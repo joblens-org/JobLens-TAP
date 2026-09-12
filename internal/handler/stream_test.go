@@ -16,9 +16,11 @@ import (
 )
 
 func newTestStreamHandler() *StreamHandler {
+	cfg := &config.Config{StreamTimeout: time.Minute, SSEHeartbeat: 0}
+	cfg.Normalize()
 	return &StreamHandler{
 		limiter: service.NewLimiter(4),
-		cfg:     &config.Config{StreamTimeout: time.Minute, SSEHeartbeat: 0},
+		cfg:     cfg,
 	}
 }
 

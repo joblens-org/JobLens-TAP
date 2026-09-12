@@ -2,19 +2,14 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"strings"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joblens/tap/internal/config"
 	"github.com/joblens/tap/internal/model"
+	"github.com/joblens/tap/internal/repository"
 	"github.com/joblens/tap/internal/service"
 )
 
@@ -30,136 +25,11 @@ func NewStreamHandler(streamSvc *service.StreamService, querySvc *service.QueryS
 	return &StreamHandler{streamSvc: streamSvc, querySvc: querySvc, limiter: limiter, cfg: cfg}
 }
 
-type streamWriter struct {
-	c      *gin.Context
-	format string
-	mu     sync.Mutex
-	failed bool
-}
-
-var errStreamClosed = errors.New("stream closed")
-
-func (sw *streamWriter) write(msg model.StreamMessage) error {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	if sw.failed {
-		return errStreamClosed
-	}
-
-	var err error
-	if sw.format == model.StreamFormatSSE {
-		err = sw.writeSSE(msg)
-	} else {
-		err = sw.writeNDJSON(msg)
-	}
-	if err != nil {
-		sw.failed = true
-		return err
-	}
-	sw.c.Writer.Flush()
-	return nil
-}
-
-func (sw *streamWriter) writeSSE(msg model.StreamMessage) error {
-	payload, err := json.Marshal(msg.Data)
-	if err != nil {
-		return err
-	}
-	if msg.ID != "" {
-		if _, err := fmt.Fprintf(sw.c.Writer, "id: %s\n", msg.ID); err != nil {
-			return err
-		}
-	}
-	_, err = fmt.Fprintf(sw.c.Writer, "event: %s\ndata: %s\n\n", msg.Type, payload)
-	return err
-}
-
-func (sw *streamWriter) writeNDJSON(msg model.StreamMessage) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	_, err = sw.c.Writer.Write(data)
-	return err
-}
-
-func (sw *streamWriter) ping() {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	if sw.failed {
-		return
-	}
-	var err error
-	if sw.format == model.StreamFormatSSE {
-		_, err = io.WriteString(sw.c.Writer, ": ping\n\n")
-	} else {
-		_, err = io.WriteString(sw.c.Writer, "{\"type\":\"ping\"}\n")
-	}
-	if err != nil {
-		sw.failed = true
-		return
-	}
-	sw.c.Writer.Flush()
-}
-
-func resolveStreamFormat(c *gin.Context, requested string) (string, error) {
-	switch requested {
-	case model.StreamFormatSSE:
-		return model.StreamFormatSSE, nil
-	case model.StreamFormatNDJSON:
-		return model.StreamFormatNDJSON, nil
-	case "":
-	default:
-		return "", fmt.Errorf("unsupported format: %s", requested)
-	}
-	if strings.Contains(c.GetHeader("Accept"), "text/event-stream") {
-		return model.StreamFormatSSE, nil
-	}
-	return model.StreamFormatNDJSON, nil
-}
-
-func (h *StreamHandler) beginStream(c *gin.Context, format string) *streamWriter {
-	if format == model.StreamFormatSSE {
-		c.Header("Content-Type", "text/event-stream")
-		c.Header("Connection", "keep-alive")
-	} else {
-		c.Header("Content-Type", "application/x-ndjson")
-	}
-	c.Header("Cache-Control", "no-cache")
-	c.Header("X-Accel-Buffering", "no")
-
-	rc := http.NewResponseController(c.Writer)
-	_ = rc.SetWriteDeadline(time.Now().Add(h.cfg.StreamTimeout + 30*time.Second))
-
-	c.Status(http.StatusOK)
-	c.Writer.Flush()
-
-	if format == model.StreamFormatSSE {
-		_, _ = io.WriteString(c.Writer, "retry: 3000\n\n")
-		c.Writer.Flush()
-	}
-	return &streamWriter{c: c, format: format}
-}
-
-func (h *StreamHandler) heartbeat(ctx context.Context, sw *streamWriter) {
-	interval := h.cfg.SSEHeartbeat
-	if interval <= 0 {
-		return
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			sw.ping()
-		}
-	}
-}
-
 func streamErrorFrom(err error) model.StreamError {
+	var backend *repository.SearchError
+	if errors.As(err, &backend) {
+		return model.StreamError{Code: backend.Status, Kind: backend.Kind, Message: backend.Error()}
+	}
 	var qe *service.QueryError
 	if errors.As(err, &qe) {
 		return model.StreamError{Code: qe.Status, Kind: qe.Kind, Message: qe.Msg}
@@ -168,16 +38,6 @@ func streamErrorFrom(err error) model.StreamError {
 		return model.StreamError{Code: service.StatusGatewayTimeout, Kind: service.ErrKindQueryTimeout, Message: "stream timed out"}
 	}
 	return model.StreamError{Code: http.StatusInternalServerError, Kind: "stream_failed", Message: err.Error()}
-}
-
-func (h *StreamHandler) finishWithError(sw *streamWriter, err error, returned int, started time.Time) {
-	se := streamErrorFrom(err)
-	_ = sw.write(model.StreamMessage{Type: model.StreamTypeError, Data: se})
-	_ = sw.write(model.StreamMessage{Type: model.StreamTypeDone, Data: model.StreamDone{
-		Returned:   returned,
-		DurationMs: time.Since(started).Milliseconds(),
-		Truncated:  true,
-	}})
 }
 
 // Raw GET /data/raw/stream
@@ -225,28 +85,12 @@ func (h *StreamHandler) Raw(c *gin.Context) {
 		"page_size", req.PageSize,
 	)
 
-	started := time.Now()
-	sw := h.beginStream(c, format)
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), h.cfg.StreamTimeout)
-	defer cancel()
-	go h.heartbeat(ctx, sw)
-
-	done, err := h.streamSvc.StreamRaw(ctx, &req, clusterIDs, sw.write)
-	if err != nil {
-		h.finishWithError(sw, err, 0, started)
-		return
+	if req.Cursor == "" {
+		req.Cursor = c.GetHeader("Last-Event-ID")
 	}
-	if err := sw.write(model.StreamMessage{Type: model.StreamTypeDone, Data: done}); err != nil {
-		return
-	}
-
-	slog.Info("[StreamHandler.Raw] completed",
-		"cluster", req.Cluster,
-		"job", req.Job,
-		"returned", done.Returned,
-		"truncated", done.Truncated,
-	)
+	h.runStream(c, format, func(ctx context.Context, emit service.EmitFunc) (*model.StreamDone, error) {
+		return h.streamSvc.StreamRaw(ctx, &req, clusterIDs, emit)
+	})
 }
 
 // TimeSeries GET /data/timeseries/stream
@@ -297,26 +141,11 @@ func (h *StreamHandler) TimeSeries(c *gin.Context) {
 		"format", format,
 	)
 
-	started := time.Now()
-	sw := h.beginStream(c, format)
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), h.cfg.StreamTimeout)
-	defer cancel()
-	go h.heartbeat(ctx, sw)
-
-	done, err := h.streamSvc.StreamTimeSeries(ctx, &req, sw.write)
-	if err != nil {
-		h.finishWithError(sw, err, 0, started)
+	if c.GetHeader("Last-Event-ID") != "" {
+		respondBadRequest(c, service.ErrKindInvalidRequest, "timeseries streams do not support resume")
 		return
 	}
-	if err := sw.write(model.StreamMessage{Type: model.StreamTypeDone, Data: done}); err != nil {
-		return
-	}
-
-	slog.Info("[StreamHandler.TimeSeries] completed",
-		"cluster", req.Cluster,
-		"job", req.Job,
-		"returned", done.Returned,
-		"truncated", done.Truncated,
-	)
+	h.runStream(c, format, func(ctx context.Context, emit service.EmitFunc) (*model.StreamDone, error) {
+		return h.streamSvc.StreamTimeSeries(ctx, &req, emit)
+	})
 }
