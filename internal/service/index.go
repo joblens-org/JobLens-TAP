@@ -28,9 +28,15 @@ func NewIndexService(cfg *config.Config, clusterMgr *cluster.Manager) *IndexServ
 // collector: 采集器类型（cpumem/io/net），为空时包含所有
 // from, to: 时间范围
 func (s *IndexService) ResolveIndices(collector string, from, to time.Time, collectors []string) ([]string, error) {
+	if from.After(to) {
+		return nil, NewQueryError(StatusBadRequest, ErrKindInvalidRequest, "from must not be after to")
+	}
 	// 确定采集器列表
 	if collector != "" {
 		collectors = []string{collector}
+	}
+	if len(collectors) == 0 {
+		return nil, NewQueryError(StatusBadRequest, ErrKindInvalidRequest, "at least one collector is required to resolve indices")
 	}
 
 	// 生成日期范围
@@ -102,12 +108,12 @@ func (s *IndexService) ParseClusterParam(param string) ([]string, error) {
 
 // generateDateRange 生成日期范围（闭区间）
 func (s *IndexService) generateDateRange(from, to time.Time) []time.Time {
-	// 规范化到日期
-	from = time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, from.Location())
-	to = time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, to.Location())
+	// writer 使用 system_clock 的 UTC 日分区，而非时间字符串显示的偏移日期。
+	start := from.UTC().Truncate(24 * time.Hour)
+	end := to.UTC().Truncate(24 * time.Hour)
 
 	var dates []time.Time
-	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		dates = append(dates, d)
 	}
 

@@ -25,6 +25,7 @@ func (c *ESClient) OpenPIT(ctx context.Context, indices []string, routing string
 	opts := []func(*esapi.OpenPointInTimeRequest){
 		c.client.OpenPointInTime.WithContext(ctx),
 		c.client.OpenPointInTime.WithAllowPartialSearchResults(false),
+		c.client.OpenPointInTime.WithIgnoreUnavailable(true),
 	}
 	if routing != "" {
 		opts = append(opts, c.client.OpenPointInTime.WithRouting(routing))
