@@ -324,7 +324,7 @@ func (s *StreamService) StreamTimeSeries(ctx context.Context, req *model.TimeSer
 		return nil, fmt.Errorf("parse to time: %w", err)
 	}
 	if err := q.parserSvc.ValidateTimeRange(from, to, q.cfg.MaxTimeRangeDays); err != nil {
-		return nil, err
+		return nil, NewQueryError(StatusBadRequest, ErrKindInvalidRequest, "%v", err)
 	}
 
 	interval, err := q.parserSvc.ParseInterval(req.Interval)

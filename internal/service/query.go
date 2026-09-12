@@ -284,7 +284,7 @@ func (s *QueryService) buildRawPlan(ctx context.Context, clusterRef string, req 
 			return nil, nil, fmt.Errorf("parse to time: %w", err)
 		}
 		if err := s.parserSvc.ValidateTimeRange(from, to, s.cfg.MaxTimeRangeDays); err != nil {
-			return nil, nil, err
+			return nil, nil, NewQueryError(StatusBadRequest, ErrKindInvalidRequest, "%v", err)
 		}
 	}
 
@@ -899,7 +899,7 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 		return nil, fmt.Errorf("parse to time: %w", err)
 	}
 	if err := s.parserSvc.ValidateTimeRange(from, to, s.cfg.MaxTimeRangeDays); err != nil {
-		return nil, err
+		return nil, NewQueryError(StatusBadRequest, ErrKindInvalidRequest, "%v", err)
 	}
 
 	if len(metrics) > s.cfg.MaxMetrics {
