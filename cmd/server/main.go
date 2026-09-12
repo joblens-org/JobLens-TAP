@@ -79,6 +79,8 @@ func main() {
 	// 初始化服务
 	querySvc := service.NewQueryService(cfg, esManager, clusterMgr)
 	collectionSvc := service.NewCollectionService(cfg, clusterMgr)
+	streamSvc := service.NewStreamService(querySvc)
+	streamLimiter := service.NewLimiter(cfg.MaxConcurrentStreams)
 
 	// 初始化处理器
 	healthHandler := handler.NewHealthHandler(esManager, Version, GitCommit, BuildTime)
@@ -89,6 +91,7 @@ func main() {
 	collectionHandler := handler.NewCollectionHandler(collectionSvc)
 	checkJobHandler := handler.NewCheckJobHandler(querySvc)
 	skillHandler := handler.NewSkillHandler(cfg.SkillAPIBaseURL)
+	streamHandler := handler.NewStreamHandler(streamSvc, querySvc, streamLimiter, cfg)
 
 	// 设置 Gin 模式
 	if os.Getenv("GIN_MODE") == "" {
@@ -109,7 +112,9 @@ func main() {
 	api := r.Group("/data")
 	{
 		api.GET("/raw", rawHandler.Query)
+		api.GET("/raw/stream", streamHandler.Raw)
 		api.GET("/timeseries", timeseriesHandler.Query)
+		api.GET("/timeseries/stream", streamHandler.TimeSeries)
 		api.GET("/summary", summaryHandler.Query)
 		api.GET("/check-job", checkJobHandler.Check)
 	}

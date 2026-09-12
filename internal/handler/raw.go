@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -43,6 +44,12 @@ func (h *RawHandler) Query(c *gin.Context) {
 	}
 	if req.To == "" {
 		req.To = "now"
+	}
+
+	if req.Size > h.querySvc.MaxSize() {
+		respondBadRequest(c, service.ErrKindInvalidRequest,
+			fmt.Sprintf("size exceeds maximum allowed %d", h.querySvc.MaxSize()))
+		return
 	}
 
 	// 验证必填参数：非 full_range 模式时必须提供 from
@@ -99,6 +106,9 @@ func (h *RawHandler) Query(c *gin.Context) {
 				"job", req.Job,
 				"error", err,
 			)
+			if respondQueryError(c, err) {
+				return
+			}
 			c.Set("error_kind", "raw_query_failed")
 			c.Set("error_detail", err.Error())
 			c.JSON(http.StatusInternalServerError, model.Response{
@@ -121,6 +131,9 @@ func (h *RawHandler) Query(c *gin.Context) {
 				"job", req.Job,
 				"error", err,
 			)
+			if respondQueryError(c, err) {
+				return
+			}
 			c.Set("error_kind", "multi_cluster_query_failed")
 			c.Set("error_detail", err.Error())
 			c.JSON(http.StatusInternalServerError, model.Response{

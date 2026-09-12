@@ -28,6 +28,9 @@ type QueryService struct {
 
 // NewQueryService 创建查询服务
 func NewQueryService(cfg *config.Config, esManager *repository.ClientManager, clusterMgr *cluster.Manager) *QueryService {
+	if cfg != nil {
+		cfg.Normalize()
+	}
 	return &QueryService{
 		cfg:        cfg,
 		esManager:  esManager,
@@ -45,6 +48,11 @@ func (s *QueryService) IndexService() *IndexService {
 // ParserService 获取 Parser 服务
 func (s *QueryService) ParserService() *ParserService {
 	return s.parserSvc
+}
+
+// MaxSize 返回单次查询记录数上限
+func (s *QueryService) MaxSize() int {
+	return s.cfg.MaxSize
 }
 
 // RawQueryResult Raw 查询结果
@@ -128,6 +136,13 @@ func (s *QueryService) BuildRawQuery(req *model.RawQueryRequest, from, to time.T
 	return query
 }
 
+func (s *QueryService) queryCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.cfg.QueryTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, s.cfg.QueryTimeout)
+}
+
 // DiscoverJobTimeRange 通过 ES 聚合发现 Job 的完整时间范围
 func (s *QueryService) DiscoverJobTimeRange(ctx context.Context, clusterName string, req *model.RawQueryRequest, jobFilters []map[string]any) (time.Time, time.Time, error) {
 	esClient, info, err := s.esManager.GetClientForCluster(clusterName)
@@ -139,14 +154,7 @@ func (s *QueryService) DiscoverJobTimeRange(ctx context.Context, clusterName str
 	realName := info.Name
 
 	// 通配符索引模式（通过注册中心渲染）
-	var indices []string
-	if req.Collector != "" {
-		indices = []string{s.cfg.Registry.RenderIndexName(req.Collector, "*")}
-	} else {
-		for _, coll := range s.cfg.DefaultCollectors {
-			indices = append(indices, s.cfg.Registry.RenderIndexName(coll, "*"))
-		}
-	}
+	indices := s.indexSvc.ResolveWildcardIndices(req.Collector, s.cfg.DefaultCollectors)
 
 	// 构建 filter：cluster_name + job
 	filters := []map[string]any{
@@ -174,7 +182,9 @@ func (s *QueryService) DiscoverJobTimeRange(ctx context.Context, clusterName str
 		"indices", indices,
 	)
 
-	result, err := esClient.Search(ctx, indices, query, "")
+	qctx, cancel := s.queryCtx(ctx)
+	result, err := esClient.Search(qctx, indices, query, "")
+	cancel()
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("search aggregation: %w", err)
 	}
@@ -218,36 +228,116 @@ func (s *QueryService) DiscoverJobTimeRange(ctx context.Context, clusterName str
 }
 
 // ExecuteRawQuery 执行单集群 Raw 查询
-func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, req *model.RawQueryRequest, cursor *model.Cursor) (*model.RawQueryResponse, error) {
-	// 解析 cluster 参数获取 clusterName 和 clusterTag
-	cn, ct := config.ParseClusterFilter(req.Cluster)
+type rawQueryPlan struct {
+	clusterName string
+	clusterTag  string
+	routing     string
+	indices     []string
+	fields      []string
+	from        time.Time
+	to          time.Time
+	jobFilters  []map[string]any
+}
+
+// buildRawPlan 解析集群、时间范围、字段与索引，供单页查询与流式分页复用
+func (s *QueryService) buildRawPlan(ctx context.Context, clusterRef string, req *model.RawQueryRequest) (*rawQueryPlan, *repository.ESClient, error) {
+	cn, ct := config.ParseClusterFilter(clusterRef)
 	if cn == "" {
-		return nil, fmt.Errorf("failed to parse cluster name from: %s", req.Cluster)
+		return nil, nil, fmt.Errorf("failed to parse cluster name from: %s", clusterRef)
+	}
+	// 单集群场景下 tag 可能保留在原始 cluster 参数中，按名字匹配后回退
+	if ct == "" {
+		if rc, rct := config.ParseClusterFilter(req.Cluster); rct != "" && rc == cn {
+			ct = rct
+		}
 	}
 
-	// 获取 ES 客户端和集群信息
 	esClient, clusterInfo, err := s.esManager.GetClientForCluster(cn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// 解析 JobID 为 filter
 	jobFilters, err := s.parserSvc.BuildJobFilter(req.Job)
 	if err != nil {
-		return nil, fmt.Errorf("invalid job id: %w", err)
+		return nil, nil, fmt.Errorf("invalid job id: %w", err)
 	}
 
-	// 单 Tag 自动优化：用户未指定 tag 但集群只有一个 → 自动补充
 	if ct == "" && len(clusterInfo.Tags) == 1 {
 		ct = clusterInfo.Tags[0]
 	}
 
-	// 将别名替换为集群真实名称，用于 ES 查询过滤
 	cn = clusterInfo.Name
 
+	var from, to time.Time
+	if req.FullRange {
+		from, to, err = s.DiscoverJobTimeRange(ctx, cn, req, jobFilters)
+		if err != nil {
+			return nil, nil, fmt.Errorf("discover time range: %w", err)
+		}
+	} else {
+		from, err = s.parserSvc.ParseTime(req.From)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse from time: %w", err)
+		}
+		to, err = s.parserSvc.ParseTime(req.To)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse to time: %w", err)
+		}
+		if err := s.parserSvc.ValidateTimeRange(from, to, s.cfg.MaxTimeRangeDays); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// full_range 下时间跨度不可控，改用通配符避免逐日枚举上千索引
+	var indices []string
+	if req.FullRange {
+		indices = s.indexSvc.ResolveWildcardIndices(req.Collector, s.cfg.DefaultCollectors)
+	} else {
+		indices, err = s.indexSvc.ResolveIndices(req.Collector, from, to, s.cfg.DefaultCollectors)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve indices: %w", err)
+		}
+	}
+
+	routing := ""
+	if ct != "" {
+		routing = ct
+	}
+
+	return &rawQueryPlan{
+		clusterName: cn,
+		clusterTag:  ct,
+		routing:     routing,
+		indices:     indices,
+		fields:      s.parserSvc.ParseFields(req.Fields),
+		from:        from,
+		to:          to,
+		jobFilters:  jobFilters,
+	}, esClient, nil
+}
+
+// ExecuteRawQuery 执行单集群单页 Raw 查询
+func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, req *model.RawQueryRequest, cursor *model.Cursor) (*model.RawQueryResponse, error) {
+	plan, esClient, err := s.buildRawPlan(ctx, clusterName, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var searchAfter []any
+	if cursor != nil && cursor.Cluster == plan.clusterName {
+		searchAfter = cursor.SearchAfter
+	}
+
+	return s.executeRawPage(ctx, plan, esClient, req, searchAfter)
+}
+
+// executeRawPage 使用已构建的计划执行单页查询，供流式分页复用（避免每页重复发现时间范围）
+func (s *QueryService) executeRawPage(ctx context.Context, plan *rawQueryPlan, esClient *repository.ESClient, req *model.RawQueryRequest, searchAfter []any) (*model.RawQueryResponse, error) {
+	query := s.BuildRawQuery(req, plan.from, plan.to, searchAfter, plan.fields, plan.clusterName, plan.clusterTag, plan.jobFilters)
+
 	slog.Debug("[ExecuteRawQuery] entry",
-		"cluster_name", cn,
-		"cluster_tag", ct,
+		"cluster_name", plan.clusterName,
+		"cluster_tag", plan.clusterTag,
 		"job", req.Job,
 		"collector", req.Collector,
 		"from", req.From,
@@ -257,66 +347,20 @@ func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, 
 		"full_range", req.FullRange,
 	)
 
-	// 解析时间范围
-	var from, to time.Time
-	if req.FullRange {
-		from, to, err = s.DiscoverJobTimeRange(ctx, cn, req, jobFilters)
-		if err != nil {
-			return nil, fmt.Errorf("discover time range: %w", err)
-		}
-	} else {
-		from, err = s.parserSvc.ParseTime(req.From)
-		if err != nil {
-			return nil, fmt.Errorf("parse from time: %w", err)
-		}
-		to, err = s.parserSvc.ParseTime(req.To)
-		if err != nil {
-			return nil, fmt.Errorf("parse to time: %w", err)
-		}
-		if err := s.parserSvc.ValidateTimeRange(from, to, s.cfg.MaxTimeRangeDays); err != nil {
-			return nil, err
-		}
-	}
-
-	// 解析字段
-	fields := s.parserSvc.ParseFields(req.Fields)
-
-	// 解析游标
-	var searchAfter []any
-	if cursor != nil && cursor.Cluster == cn {
-		searchAfter = cursor.SearchAfter
-	}
-
-	// 构建查询
-	query := s.BuildRawQuery(req, from, to, searchAfter, fields, cn, ct, jobFilters)
-
-	// 解析索引
-	indices, err := s.indexSvc.ResolveIndices(req.Collector, from, to, s.cfg.DefaultCollectors)
-	if err != nil {
-		return nil, fmt.Errorf("resolve indices: %w", err)
-	}
-
-	// 确定 routing（指定 tag 时启用）
-	routing := ""
-	if ct != "" {
-		routing = ct
-	}
-
-	// 执行查询
 	startTime := time.Now()
-	result, err := esClient.Search(ctx, indices, query, routing)
+	qctx, cancel := s.queryCtx(ctx)
+	result, err := esClient.Search(qctx, plan.indices, query, plan.routing)
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("execute search: %w", err)
 	}
 	queryTimeMs := time.Since(startTime).Milliseconds()
 
-	// 扁平化结果
-	records := FlattenHits(result.Hits, cn, req.Flatten, s.cfg.Registry)
+	records := FlattenHits(result.Hits, plan.clusterName, req.Flatten, s.cfg.Registry, s.cfg.MaxFlattenFields)
 
-	// 构建响应
 	response := &model.RawQueryResponse{
 		Records:         records,
-		IndicesResolved: indices,
+		IndicesResolved: plan.indices,
 		Pagination: &model.Pagination{
 			Returned: len(records),
 			Total:    int(result.Total),
@@ -328,7 +372,7 @@ func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, 
 	if response.Pagination.HasMore && len(result.Hits) > 0 {
 		lastHit := result.Hits[len(result.Hits)-1]
 		nextCursor := model.Cursor{
-			Cluster:     cn,
+			Cluster:     plan.clusterName,
 			SearchAfter: lastHit.Sort,
 			QueryHash:   computeQueryHash(req),
 		}
@@ -336,18 +380,18 @@ func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, 
 	}
 
 	slog.Debug("raw query executed",
-		"cluster", cn,
+		"cluster", plan.clusterName,
 		"took_ms", queryTimeMs,
 		"total", result.Total,
 		"returned", len(records),
-		"indices", indices,
-		"routing", routing,
+		"indices", plan.indices,
+		"routing", plan.routing,
 	)
 
 	slog.Info("[ExecuteRawQuery] completed",
-		"cluster", cn,
+		"cluster", plan.clusterName,
 		"job", req.Job,
-		"indices", len(indices),
+		"indices", len(plan.indices),
 		"total_hits", result.Total,
 		"returned", len(records),
 		"took_ms", queryTimeMs,
@@ -566,7 +610,7 @@ func (s *QueryService) BuildMultiMetricTimeSeriesQuery(req *model.TimeSeriesRequ
 			"group_by_" + req.By: map[string]any{
 				"terms": map[string]any{
 					"field": getGroupByField(req.By),
-					"size":  100,
+					"size":  groupByTermsSize,
 				},
 				"aggs": map[string]any{
 					"timeseries": map[string]any{
@@ -662,7 +706,7 @@ func (s *QueryService) BuildTimeSeriesQuery(req *model.TimeSeriesRequest, from, 
 			"group_by_" + req.By: map[string]any{
 				"terms": map[string]any{
 					"field": getGroupByField(req.By),
-					"size":  100,
+					"size":  groupByTermsSize,
 				},
 				"aggs": map[string]any{
 					"timeseries": map[string]any{
@@ -858,6 +902,20 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 		return nil, err
 	}
 
+	if len(metrics) > s.cfg.MaxMetrics {
+		return nil, NewQueryError(StatusBadRequest, ErrKindTooManyMetrics,
+			"too many metrics: %d (max %d)", len(metrics), s.cfg.MaxMetrics)
+	}
+
+	interval, err := s.parserSvc.ParseInterval(req.Interval)
+	if err != nil {
+		return nil, NewQueryError(StatusBadRequest, ErrKindInvalidInterval, "invalid interval: %v", err)
+	}
+	if buckets := estimateBuckets(dateBucketCount(from, to, interval), len(metrics), req.By != ""); buckets > int64(s.cfg.MaxESBuckets) {
+		return nil, NewQueryError(StatusBadRequest, ErrKindTooManyBuckets,
+			"estimated %d buckets exceeds limit %d, use /data/timeseries/stream", buckets, s.cfg.MaxESBuckets)
+	}
+
 	// 按 collector 分组 metrics
 	metricsByCollector := GroupMetricsByCollector(metrics, s.cfg.Registry)
 
@@ -880,32 +938,16 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 	var totalTookMs int64
 	var totalHits int64
 	for collector, collectorMetrics := range metricsByCollector {
-		query := s.BuildMultiMetricTimeSeriesQuery(req, from, to, collectorMetrics, collector, cn, ct, jobFilters)
-
-		indices, err := s.indexSvc.ResolveIndices(collector, from, to, s.cfg.DefaultCollectors)
+		windowResp, tookMs, hits, err := s.executeTimeSeriesWindow(ctx, esClient, req, collectorMetrics, collector, cn, ct, from, to, jobFilters, routing)
 		if err != nil {
-			return nil, fmt.Errorf("resolve indices: %w", err)
+			return nil, err
 		}
-
-		startTime := time.Now()
-		result, err := esClient.Search(ctx, indices, query, routing)
-		if err != nil {
-			return nil, fmt.Errorf("execute search: %w", err)
+		totalTookMs += tookMs
+		totalHits += hits
+		response.Records = append(response.Records, windowResp.Records...)
+		for metric, stats := range windowResp.Stats {
+			response.Stats[metric] = stats
 		}
-		queryTimeMs := time.Since(startTime).Milliseconds()
-		totalTookMs += queryTimeMs
-		totalHits += result.Total
-
-		slog.Debug("timeseries query executed",
-			"cluster", cn,
-			"took_ms", queryTimeMs,
-			"metrics", collectorMetrics,
-			"collector", collector,
-			"interval", req.Interval,
-			"indices", indices,
-		)
-
-		s.parseMultiMetricAggregation(result.Aggregations, req, collectorMetrics, response)
 	}
 
 	slog.Info("[ExecuteMultiMetricTimeSeriesQuery] completed",
@@ -918,6 +960,44 @@ func (s *QueryService) ExecuteMultiMetricTimeSeriesQuery(ctx context.Context, cl
 	)
 
 	return response, nil
+}
+
+// executeTimeSeriesWindow 执行单 collector、单时间窗的多 metric 聚合，供非流式与流式复用
+func (s *QueryService) executeTimeSeriesWindow(ctx context.Context, esClient *repository.ESClient, req *model.TimeSeriesRequest, collectorMetrics []string, collector, cn, ct string, from, to time.Time, jobFilters []map[string]any, routing string) (*model.TimeSeriesResponse, int64, int64, error) {
+	query := s.BuildMultiMetricTimeSeriesQuery(req, from, to, collectorMetrics, collector, cn, ct, jobFilters)
+
+	indices, err := s.indexSvc.ResolveIndices(collector, from, to, s.cfg.DefaultCollectors)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("resolve indices: %w", err)
+	}
+
+	startTime := time.Now()
+	qctx, cancel := s.queryCtx(ctx)
+	result, err := esClient.Search(qctx, indices, query, routing)
+	cancel()
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("execute search: %w", err)
+	}
+	queryTimeMs := time.Since(startTime).Milliseconds()
+
+	slog.Debug("timeseries query executed",
+		"cluster", cn,
+		"took_ms", queryTimeMs,
+		"metrics", collectorMetrics,
+		"collector", collector,
+		"interval", req.Interval,
+		"indices", indices,
+	)
+
+	windowResp := &model.TimeSeriesResponse{
+		Metrics:  collectorMetrics,
+		Interval: req.Interval,
+		Records:  []model.TimeSeriesRecord{},
+		Stats:    make(map[string]*model.TimeSeriesStats),
+	}
+	s.parseMultiMetricAggregation(result.Aggregations, req, collectorMetrics, windowResp)
+
+	return windowResp, queryTimeMs, result.Total, nil
 }
 
 // parseMultiMetricAggregation 解析多 metric 聚合结果
@@ -1179,7 +1259,9 @@ func (s *QueryService) ExecuteSummaryQuery(ctx context.Context, clusterName stri
 
 	// 执行查询
 	startTime := time.Now()
-	result, err := esClient.Search(ctx, indices, query, routing)
+	qctx, cancel := s.queryCtx(ctx)
+	result, err := esClient.Search(qctx, indices, query, routing)
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("execute search: %w", err)
 	}
@@ -1374,7 +1456,9 @@ func (s *QueryService) CheckJobExists(ctx context.Context, clusterName, clusterT
 	}
 
 	// 执行 _search size=0 + 聚合（不返回文档体，与 _count 性能相当）
-	result, err := esClient.Search(ctx, indices, query, routing)
+	qctx, cancel := s.queryCtx(ctx)
+	result, err := esClient.Search(qctx, indices, query, routing)
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}

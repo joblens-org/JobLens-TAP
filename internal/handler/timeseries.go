@@ -105,6 +105,9 @@ func (h *TimeSeriesHandler) Query(c *gin.Context) {
 			"metric", req.Metric,
 			"error", err,
 		)
+		if respondQueryError(c, err) {
+			return
+		}
 		c.Set("error_kind", "timeseries_query_failed")
 		c.Set("error_detail", err.Error())
 		c.JSON(http.StatusInternalServerError, model.Response{

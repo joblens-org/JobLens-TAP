@@ -9,7 +9,7 @@ type RawQueryRequest struct {
 	To        string `form:"to" default:"now"`
 	Collector string `form:"collector" default:""`
 	Fields    string `form:"fields" default:""`
-	Size      int    `form:"size" binding:"max=10000" default:"100"`
+	Size      int    `form:"size" default:"100"`
 	Cursor    string `form:"cursor" default:""`
 	Flatten   bool   `form:"flatten" default:"true"`
 	FullRange bool   `form:"full_range" default:"false"`

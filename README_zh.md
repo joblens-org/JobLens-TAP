@@ -82,7 +82,9 @@ make docker-logs
 | GET | `/health` | 服务健康检查 |
 | GET | `/ready` | 就绪探针（检查 ES 集群连接状态） |
 | GET | `/data/raw` | 原始数据查询（日志级别采样点） |
+| GET | `/data/raw/stream` | 原始数据流式查询（分页 + k-way merge，NDJSON/SSE） |
 | GET | `/data/timeseries` | 时序聚合查询（图表级别，仅支持单集群） |
+| GET | `/data/timeseries/stream` | 时序流式查询（时间窗分片，NDJSON/SSE） |
 | GET | `/data/summary` | 任务摘要查询（仅支持单集群） |
 | GET | `/data/check-job` | Job 数据存在性检查（轻量级，size=0） |
 | GET | `/schema` | Schema 发现（字段与集群元数据） |
@@ -101,6 +103,13 @@ curl "http://localhost:8080/data/raw?cluster=sz01&job=172.0&from=now-1h&fields=c
 
 # 时序聚合查询（多指标，支持 by=host 或 by=collector）
 curl "http://localhost:8080/data/timeseries?cluster=sz01&job=172.0&metric=cpu,mem&interval=1m&from=now-1h&by=host"
+
+# 流式原始查询（默认 NDJSON；超大结果内存有界）
+curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&full_range=true&page_size=500"
+
+# 流式时序查询（通过 Accept 头使用 SSE）
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8080/data/timeseries/stream?cluster=sz01&job=172.0&metric=cpu&interval=1s&from=now-7d"
 
 # 任务摘要
 curl "http://localhost:8080/data/summary?cluster=sz01&job=172.0"
@@ -135,6 +144,17 @@ curl -X POST "http://localhost:8080/collect" \
 | `TAP_DEFAULT_SIZE` | 否 | `100` | 单次查询默认返回数 |
 | `TAP_MAX_TIME_RANGE_DAYS` | 否 | `7` | 最大查询时间范围（天） |
 | `TAP_DEFAULT_INTERVAL` | 否 | `1m` | 时序查询默认聚合粒度 |
+| `TAP_QUERY_TIMEOUT` | 否 | `60s` | 单次 ES 查询超时 |
+| `TAP_MAX_ES_BUCKETS` | 否 | `65536` | 单次查询预估桶数硬上限 |
+| `TAP_MAX_METRICS` | 否 | `20` | 单次时序查询最大指标数 |
+| `TAP_MAX_CONCURRENT_STREAMS` | 否 | `16` | 并发流式请求上限 |
+| `TAP_MAX_FLATTEN_FIELDS` | 否 | `2000` | 单条记录扁平化最大键数 |
+| `TAP_STREAM_PAGE_SIZE` | 否 | `500` | raw 流单页大小 |
+| `TAP_STREAM_WINDOW_BUCKETS` | 否 | `5000` | 时序流单窗最大桶数 |
+| `TAP_STREAM_MAX_RECORDS` | 否 | `100000` | 流式单请求记录数软上限 |
+| `TAP_STREAM_MAX_WINDOWS` | 否 | `2000` | 时序流最大时间窗数 |
+| `TAP_STREAM_TIMEOUT` | 否 | `10m` | 单个流的整体超时 |
+| `TAP_SSE_HEARTBEAT` | 否 | `15s` | SSE 心跳间隔 |
 | `TAP_COLLECTOR_REGISTRY_PATH` | 推荐 | - | 采集器注册文件路径（JSON），支持 SIGHUP 热重载 |
 | `TAP_DEFAULT_COLLECTORS` | 否 | `cpumem,io,net` | 默认采集器列表（仅注册文件未设置时生效，已废弃） |
 | `TAP_SERVICE_REGISTRY_URL` | 否 | - | 服务注册中心地址（采集触发用） |

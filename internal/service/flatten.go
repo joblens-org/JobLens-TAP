@@ -12,8 +12,23 @@ import (
 )
 
 // FlattenHit 将 ES 原始文档转换为扁平 Record
-// 快捷字段提取由注册中心 record_field 声明驱动
-func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry) *model.Record {
+// 快捷字段提取由注册中心 record_field 声明驱动；maxFields>0 时限制扁平化键数量
+func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry, maxFields ...int) *model.Record {
+	var aliases []model.FieldAlias
+	if registry != nil {
+		aliases = registry.RecordAliases()
+	}
+	return flattenHit(hit, clusterID, flatten, registry, aliases, fieldLimit(maxFields))
+}
+
+func fieldLimit(maxFields []int) int {
+	if len(maxFields) > 0 {
+		return maxFields[0]
+	}
+	return 0
+}
+
+func flattenHit(hit repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry, aliases []model.FieldAlias, maxFields int) *model.Record {
 	record := &model.Record{
 		Cluster: clusterID,
 		Fields:  make(map[string]any),
@@ -24,7 +39,6 @@ func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, regist
 		return record
 	}
 
-	// 提取顶层标准字段
 	if v, ok := source["hostname"].(string); ok {
 		record.Host = v
 	}
@@ -35,13 +49,10 @@ func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, regist
 		record.Collector = extractCollectorFromIndex(hit.Index, registry)
 	}
 
-	// 提取 job_info
 	if jobInfo, ok := source["job_info"].(map[string]any); ok {
-		// 优先使用 NativeJobID 直接匹配前端 job 参数
 		if nativeID, ok := jobInfo["NativeJobID"].(string); ok {
 			record.Job = nativeID
 		} else if jobID, ok := jobInfo["JobID"]; ok {
-			// 兼容旧数据（无 NativeJobID 时 fallback 到 JobID）
 			switch id := jobID.(type) {
 			case float64:
 				record.Job = int64(id)
@@ -62,21 +73,17 @@ func FlattenHit(hit repository.SearchHit, clusterID string, flatten bool, regist
 		return record
 	}
 
-	// 扁平化模式：展开 data 下所有嵌套字段
 	if data, ok := source["data"].(map[string]any); ok {
-		flattenNested("data", data, record.Fields)
+		flattenNested("data", data, record.Fields, maxFields)
 
-		// 按注册中心 record_field 声明提取快捷字段
-		if registry != nil {
-			for _, fa := range registry.RecordAliases() {
-				// .keyword 是 ES mapping 的 multi-field 后缀，文档 source 中不存在
-				key := strings.TrimSuffix(fa.ESField, ".keyword")
-				raw, ok := record.Fields[key]
-				if !ok {
-					continue
-				}
-				applyRecordField(record, fa, raw)
+		for _, fa := range aliases {
+			// .keyword 是 ES mapping 的 multi-field 后缀，文档 source 中不存在
+			key := strings.TrimSuffix(fa.ESField, ".keyword")
+			raw, ok := record.Fields[key]
+			if !ok {
+				continue
 			}
+			applyRecordField(record, fa, raw)
 		}
 	}
 
@@ -148,17 +155,21 @@ func extractCollectorFromIndex(index string, registry *model.CollectorRegistry) 
 // - map[string]any: 递归处理子键，使用 parent.child 前缀
 // - []interface{}: 按索引递归处理，使用 prefix.index 格式
 // - 基本类型: 直接设置到 fields map
-func flattenNested(prefix string, value any, fields map[string]any) {
+// maxFields>0 时达到上限即停止展开，避免超大数组撑爆内存
+func flattenNested(prefix string, value any, fields map[string]any, maxFields int) {
+	if maxFields > 0 && len(fields) >= maxFields {
+		return
+	}
 	switch v := value.(type) {
 	case map[string]any:
 		for k, childVal := range v {
 			childKey := prefix + "." + k
-			flattenNested(childKey, childVal, fields)
+			flattenNested(childKey, childVal, fields, maxFields)
 		}
 	case []interface{}:
 		for i, childVal := range v {
 			childKey := fmt.Sprintf("%s.%d", prefix, i)
-			flattenNested(childKey, childVal, fields)
+			flattenNested(childKey, childVal, fields, maxFields)
 		}
 	default:
 		fields[prefix] = value
@@ -166,16 +177,22 @@ func flattenNested(prefix string, value any, fields map[string]any) {
 }
 
 // FlattenHits 批量扁平化 ES 响应
-func FlattenHits(hits []repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry) []model.Record {
+func FlattenHits(hits []repository.SearchHit, clusterID string, flatten bool, registry *model.CollectorRegistry, maxFields ...int) []model.Record {
 	// LOG_REASON: 扁平化是数据处理的关键节点，记录命中数与期望值对比，便于发现数据截断或丢失
 	slog.Debug("[FlattenHits] flattening hits",
 		"cluster", clusterID,
 		"hits_count", len(hits),
 	)
 
+	var aliases []model.FieldAlias
+	if registry != nil {
+		aliases = registry.RecordAliases()
+	}
+	limit := fieldLimit(maxFields)
+
 	records := make([]model.Record, 0, len(hits))
 	for _, hit := range hits {
-		record := FlattenHit(hit, clusterID, flatten, registry)
+		record := flattenHit(hit, clusterID, flatten, registry, aliases, limit)
 		records = append(records, *record)
 	}
 	return records

@@ -46,7 +46,21 @@ func TestMain(m *testing.M) {
 		DefaultSize:      100,
 		MaxTimeRangeDays: 7,
 		DefaultInterval:  "1m",
-		Registry:         model.BuildDefaultRegistry(),
+		QueryTimeout:     30 * time.Second,
+
+		MaxESBuckets:         65536,
+		MaxMetrics:           20,
+		MaxConcurrentStreams: 16,
+		MaxFlattenFields:     2000,
+
+		StreamPageSize:      500,
+		StreamWindowBuckets: 5000,
+		StreamMaxRecords:    100000,
+		StreamMaxWindows:    2000,
+		StreamTimeout:       10 * time.Minute,
+		SSEHeartbeat:        15 * time.Second,
+
+		Registry: model.BuildDefaultRegistry(),
 	}
 	model.SetDefaultRegistry(appCfg.Registry)
 

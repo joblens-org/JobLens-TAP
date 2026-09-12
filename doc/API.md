@@ -346,6 +346,62 @@ GET /data/timeseries
 
 ---
 
+### 3.1 Streaming Queries (Very Large Results)
+
+For very large queries, TAP shards server-side (raw: `search_after` paging; timeseries: time-window slicing) and pushes results incrementally. Peak memory is independent of the total result size.
+
+#### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/data/raw/stream` | Raw streaming, multi-cluster k-way merge, globally time-descending |
+| GET | `/data/timeseries/stream` | Time-series streaming, time-window sharded, single cluster only |
+
+#### Transport
+
+- Default `application/x-ndjson`: one JSON object per line.
+- `format=sse` or `Accept: text/event-stream` selects SSE.
+- Response headers include `Cache-Control: no-cache` and `X-Accel-Buffering: no` (disable proxy buffering).
+
+#### Message envelope
+
+```json
+{"type":"meta","data":{...}}
+{"type":"records","data":{"records":[...],"returned":100,"window":{"from":"...","to":"..."}}}
+{"type":"done","data":{"returned":1000,"duration_ms":1234,"truncated":false,"stats":{...}}}
+{"type":"error","data":{"code":400,"kind":"too_many_buckets","message":"..."}}
+```
+
+Order: `meta` (once) → `records` (many) → `done` (once). On mid-stream failure an `error` is sent before `done`. SSE sends `: ping` heartbeats every 15s (configurable).
+
+#### Additional parameters
+
+| Parameter | Applies to | Description |
+|-----------|-----------|-------------|
+| `page_size` | raw | Page size, default `TAP_STREAM_PAGE_SIZE` |
+| `window_buckets` | timeseries | Max buckets per window, default `TAP_STREAM_WINDOW_BUCKETS` |
+| `max_records` | both | Soft cap of records per request, default `TAP_STREAM_MAX_RECORDS` |
+| `format` | both | `ndjson` (default) / `sse` |
+
+#### Notes
+
+- Non-streaming `/data/timeseries` returns `400 too_many_buckets` when the estimated bucket count exceeds `TAP_MAX_ES_BUCKETS`; use `/data/timeseries/stream` instead.
+- Concurrent streams are capped by `TAP_MAX_CONCURRENT_STREAMS`; excess returns `429 too_many_requests`.
+- Streaming endpoints return a message stream, not the `{code,message,data}` envelope.
+
+#### Examples
+
+```bash
+# NDJSON raw stream
+curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&full_range=true&page_size=500"
+
+# SSE time-series stream
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8080/data/timeseries/stream?cluster=sz01&job=172.0&metric=cpu&interval=1s&from=now-7d"
+```
+
+---
+
 ### 4. Job Summary Query
 
 Retrieves job-level statistical summary. **Single cluster only**.

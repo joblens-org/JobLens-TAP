@@ -57,6 +57,18 @@ func (s *IndexService) ResolveIndices(collector string, from, to time.Time, coll
 	return indices, nil
 }
 
+// ResolveWildcardIndices 生成通配符索引列表（不按日期展开），用于长作业全时段查询
+func (s *IndexService) ResolveWildcardIndices(collector string, collectors []string) []string {
+	if collector != "" {
+		collectors = []string{collector}
+	}
+	indices := make([]string, 0, len(collectors))
+	for _, coll := range collectors {
+		indices = append(indices, s.cfg.Registry.RenderIndexName(coll, "*"))
+	}
+	return indices
+}
+
 // ParseClusterParam 解析集群参数（支持多值和通配）
 // 返回解析后的 cluster_name 列表
 func (s *IndexService) ParseClusterParam(param string) ([]string, error) {

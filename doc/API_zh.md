@@ -336,6 +336,62 @@ GET /data/timeseries
 
 ---
 
+### 3.1 流式查询（超大结果）
+
+用于超大查询场景：TAP 在服务端分片（raw 按 `search_after` 分页、timeseries 按时间窗），边查边推，峰值内存与结果总量无关。
+
+#### 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/data/raw/stream` | 原始数据流式，支持多集群 k-way merge，全局时间降序 |
+| GET | `/data/timeseries/stream` | 时序数据流式，按时间窗分片，仅单集群 |
+
+#### 传输格式
+
+- 默认 `application/x-ndjson`：每行一个 JSON 对象。
+- `format=sse` 或请求头 `Accept: text/event-stream` 时使用 SSE。
+- 响应头包含 `Cache-Control: no-cache`、`X-Accel-Buffering: no`（需配合反向代理关闭缓冲）。
+
+#### 消息信封
+
+```json
+{"type":"meta","data":{...}}
+{"type":"records","data":{"records":[...],"returned":100,"window":{"from":"...","to":"..."}}}
+{"type":"done","data":{"returned":1000,"duration_ms":1234,"truncated":false,"stats":{...}}}
+{"type":"error","data":{"code":400,"kind":"too_many_buckets","message":"..."}}
+```
+
+`type` 依次为 `meta`（一次）→ `records`（多次）→ `done`（一次）；中途出错发送 `error` 后以 `done` 收尾。SSE 模式每 15s（可配）发送 `: ping` 心跳。
+
+#### 额外请求参数
+
+| 参数 | 适用 | 说明 |
+|------|------|------|
+| `page_size` | raw | 单页大小，默认 `TAP_STREAM_PAGE_SIZE` |
+| `window_buckets` | timeseries | 单窗最大桶数，默认 `TAP_STREAM_WINDOW_BUCKETS` |
+| `max_records` | 两者 | 本次流总量软上限，默认 `TAP_STREAM_MAX_RECORDS` |
+| `format` | 两者 | `ndjson`（默认）/ `sse` |
+
+#### 合规性说明
+
+- 非流式 `/data/timeseries` 预估桶数超过 `TAP_MAX_ES_BUCKETS` 时返回 `400 too_many_buckets`，请改用 `/data/timeseries/stream`。
+- 并发流超过 `TAP_MAX_CONCURRENT_STREAMS` 时返回 `429 too_many_requests`。
+- 流式端点响应为消息流，不是 `{code,message,data}` 信封。
+
+#### 示例
+
+```bash
+# NDJSON 流式原始数据
+curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&full_range=true&page_size=500"
+
+# SSE 流式时序数据
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8080/data/timeseries/stream?cluster=sz01&job=172.0&metric=cpu&interval=1s&from=now-7d"
+```
+
+---
+
 ### 4. 任务摘要查询
 
 获取任务级统计摘要。**仅支持单集群查询**。

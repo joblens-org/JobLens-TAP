@@ -125,6 +125,40 @@ func (s *ParserService) parseDuration(input string) (time.Duration, error) {
 	return time.Duration(sign*value) * multiplier, nil
 }
 
+// ParseInterval 解析聚合间隔，支持 Go duration（ms/s/m/h）以及 d/w 后缀
+func (s *ParserService) ParseInterval(input string) (time.Duration, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return 0, fmt.Errorf("interval is empty")
+	}
+
+	if d, err := time.ParseDuration(input); err == nil {
+		if d <= 0 {
+			return 0, fmt.Errorf("interval must be positive: %s", input)
+		}
+		return d, nil
+	}
+
+	re := regexp.MustCompile(`^(\d+)([dw])$`)
+	matches := re.FindStringSubmatch(input)
+	if matches == nil {
+		return 0, fmt.Errorf("invalid interval format: %s", input)
+	}
+	value, _ := strconv.Atoi(matches[1])
+	if value <= 0 {
+		return 0, fmt.Errorf("interval must be positive: %s", input)
+	}
+
+	var multiplier time.Duration
+	switch matches[2] {
+	case "d":
+		multiplier = 24 * time.Hour
+	case "w":
+		multiplier = 7 * 24 * time.Hour
+	}
+	return time.Duration(value) * multiplier, nil
+}
+
 // ParseFields 解析字段列表（逗号分隔）
 func (s *ParserService) ParseFields(input string) []string {
 	if input == "" {

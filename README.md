@@ -82,7 +82,9 @@ All endpoints return a unified `{code, message, data, meta}` response structure.
 | GET | `/health` | Service health check |
 | GET | `/ready` | Readiness probe (checks ES cluster connectivity) |
 | GET | `/data/raw` | Raw data query (log-level sample points) |
+| GET | `/data/raw/stream` | Raw data streaming (paged + k-way merge, NDJSON/SSE) |
 | GET | `/data/timeseries` | Time-series aggregation query (chart level, single cluster only) |
+| GET | `/data/timeseries/stream` | Time-series streaming (time-window sharded, NDJSON/SSE) |
 | GET | `/data/summary` | Job summary query (single cluster only) |
 | GET | `/data/check-job` | Job data existence check (lightweight, size=0) |
 | GET | `/schema` | Schema discovery (fields and cluster metadata) |
@@ -101,6 +103,13 @@ curl "http://localhost:8080/data/raw?cluster=sz01&job=172.0&from=now-1h&fields=c
 
 # Time-series aggregation (multi-metric, supports by=host or by=collector)
 curl "http://localhost:8080/data/timeseries?cluster=sz01&job=172.0&metric=cpu,mem&interval=1m&from=now-1h&by=host"
+
+# Streaming raw query (NDJSON by default; bounded memory for very large results)
+curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&full_range=true&page_size=500"
+
+# Streaming time-series (SSE via Accept header)
+curl -N -H "Accept: text/event-stream" \
+  "http://localhost:8080/data/timeseries/stream?cluster=sz01&job=172.0&metric=cpu&interval=1s&from=now-7d"
 
 # Job summary
 curl "http://localhost:8080/data/summary?cluster=sz01&job=172.0"
@@ -135,6 +144,17 @@ All configuration is loaded via environment variables — no config files requir
 | `TAP_DEFAULT_SIZE` | No | `100` | Default records per query |
 | `TAP_MAX_TIME_RANGE_DAYS` | No | `7` | Maximum time range in days |
 | `TAP_DEFAULT_INTERVAL` | No | `1m` | Default aggregation interval for timeseries |
+| `TAP_QUERY_TIMEOUT` | No | `60s` | Timeout for a single ES query |
+| `TAP_MAX_ES_BUCKETS` | No | `65536` | Hard cap of estimated aggregation buckets per query |
+| `TAP_MAX_METRICS` | No | `20` | Max metrics per timeseries query |
+| `TAP_MAX_CONCURRENT_STREAMS` | No | `16` | Max concurrent streaming requests |
+| `TAP_MAX_FLATTEN_FIELDS` | No | `2000` | Max flattened keys per raw record |
+| `TAP_STREAM_PAGE_SIZE` | No | `500` | Raw stream page size |
+| `TAP_STREAM_WINDOW_BUCKETS` | No | `5000` | Max buckets per time window in timeseries stream |
+| `TAP_STREAM_MAX_RECORDS` | No | `100000` | Soft cap of records streamed per request |
+| `TAP_STREAM_MAX_WINDOWS` | No | `2000` | Max time windows for timeseries stream |
+| `TAP_STREAM_TIMEOUT` | No | `10m` | Overall timeout of a stream |
+| `TAP_SSE_HEARTBEAT` | No | `15s` | SSE heartbeat interval |
 | `TAP_COLLECTOR_REGISTRY_PATH` | Recommended | - | Path to collector registry JSON file, supports SIGHUP hot-reload |
 | `TAP_DEFAULT_COLLECTORS` | No | `cpumem,io,net` | Default collector list (deprecated, used only when registry file is not set) |
 | `TAP_SERVICE_REGISTRY_URL` | No | - | Service registry URL (for collection triggers) |

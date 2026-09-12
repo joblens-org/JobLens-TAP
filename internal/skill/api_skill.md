@@ -32,9 +32,11 @@ metadata:
 | 用户意图关键词 | 目标端点 | 典型问法 |
 |--------------|---------|---------|
 | 趋势、折线、时序、曲线、变化、peak | `GET /data/timeseries` | "看看 172.0 最近 1 小时 CPU 变化" |
+| 长时段/细粒度时序、桶数超限 | `GET /data/timeseries/stream` | "看下这个跑了一周的作业每秒 CPU" |
 | 汇总、摘要、总览、仪表板、概况 | `GET /data/summary` | "看下 67890 的资源使用概况" |
 | 是否存在、在哪个集群、有没有、检查、查找 | `GET /data/check-job` | "172.0 在哪些集群有数据？" |
 | 原始数据、导出、记录、列表、日志 | `GET /data/raw` | "导出 172.0 全部 CPU 数据" |
+| 全量导出、长作业原始数据 | `GET /data/raw/stream` | "导出长作业的全部原始数据" |
 | 字段、Schema、有哪些指标、集群列表 | `GET /schema` | "有哪些集群？" |
 | 采集、触发、抓数据、trace | `POST /collect` | "触发 172.0 的数据采集" |
 
@@ -197,6 +199,41 @@ echo "OK: jq validation passed"
 | `by` | 否 | 空=全局。`host` / `collector` |
 
 **响应关键字段**：`records[]`（含 `metric/label/timestamp/value`）、`stats`（`global_max/global_avg`）
+
+## GET /data/raw/stream —— 原始数据流式（超大结果）
+
+当 `/data/raw` 预计数据量很大（长作业、全时段 `full_range=true`、导出全量）时改用本端点，TAP 会分页并在多集群间做 k-way merge，内存占用恒定。
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `cluster` | 是 | 支持多集群 / `*` |
+| `job` | 是 | 原生 JobID |
+| `from` | 否 | 非 `full_range` 时必填 |
+| `to` | 否 | 默认 `now` |
+| `collector` | 否 | 采集器 |
+| `fields` | 否 | 字段白名单 |
+| `flatten` | 否 | 默认 `false`（流式默认不摊平） |
+| `full_range` | 否 | `true` 自动发现作业全时段 |
+| `page_size` | 否 | 单页大小，默认服务端配置 |
+| `max_records` | 否 | 本次流总量软上限 |
+| `format` | 否 | `ndjson`（默认）/ `sse` |
+
+**输出**：每行一个 JSON（NDJSON），`type` 依次为 `meta` → `records`（多次）→ `done`；错误为 `error`。示例：
+```bash
+curl -N "[BASE_URL]/data/raw/stream?cluster=htcondor01&job=172.0&full_range=true&page_size=500"
+```
+
+## GET /data/timeseries/stream —— 时序数据流式（长时段/细粒度）
+
+当 `/data/timeseries` 因桶数超限返回 `too_many_buckets` 时改用本端点，TAP 按时间窗分片，逐窗推送；全局 `stats` 在 `done` 中给出。
+
+参数同 `/data/timeseries`，另支持 `window_buckets`、`max_records`、`format`。示例：
+```bash
+curl -N -H "Accept: text/event-stream" \
+  "[BASE_URL]/data/timeseries/stream?cluster=htcondor01&job=172.0&metric=cpu&interval=1s&from=now-7d"
+```
+
+> 流式端点返回的不是 `{code,message,data}` 信封，而是 NDJSON/SSE 消息流；解析时按行读取并识别 `type` 字段。
 
 ## GET /data/summary —— 任务摘要
 
