@@ -15,6 +15,7 @@
   - [1. 健康检查](#1-健康检查)
   - [2. 原始数据查询](#2-原始数据查询)
   - [3. 时序数据查询](#3-时序数据查询)
+  - [3.1 流式查询（超大结果）](#31-流式查询超大结果)
   - [4. 任务摘要查询](#4-任务摘要查询)
   - [5. Schema 发现](#5-schema-发现)
   - [6. Job 数据存在性检查](#6-job-数据存在性检查)
@@ -338,14 +339,14 @@ GET /data/timeseries
 
 ### 3.1 流式查询（超大结果）
 
-用于超大查询场景：TAP 在服务端分片（raw 按 `search_after` 分页、timeseries 按时间窗），边查边推，峰值内存与结果总量无关。
+用于超大查询场景：TAP 在服务端分片（raw 按 PIT + `search_after` 分页、timeseries 按桶对齐时间窗），边查边推，内存占用与单页/单窗大小相关，不随结果总量增长。
 
 #### 端点
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/data/raw/stream` | 原始数据流式，支持多集群 k-way merge，全局时间降序 |
-| GET | `/data/timeseries/stream` | 时序数据流式，按时间窗分片，仅单集群 |
+| GET | `/data/raw/stream` | 原始数据流式，支持多集群 k-way merge，全局时间降序；单集群支持断点续传 |
+| GET | `/data/timeseries/stream` | 时序数据流式，按桶对齐时间窗分片，仅单集群，不支持续传 |
 
 #### 传输格式
 
@@ -357,27 +358,49 @@ GET /data/timeseries
 
 ```json
 {"type":"meta","data":{...}}
-{"type":"records","data":{"records":[...],"returned":100,"window":{"from":"...","to":"..."}}}
-{"type":"done","data":{"returned":1000,"duration_ms":1234,"truncated":false,"stats":{...}}}
+{"type":"records","id":"<cursor>","data":{"records":[...],"returned":100,"window":{"from":"...","to":"..."}}}
+{"type":"done","id":"<cursor>","data":{"status":"success","complete":true,"stop_reason":"exhausted","returned":1000,"duration_ms":1234,"truncated":false,"stats":{...}}}
 {"type":"error","data":{"code":400,"kind":"too_many_buckets","message":"..."}}
 ```
 
 `type` 依次为 `meta`（一次）→ `records`（多次）→ `done`（一次）；中途出错发送 `error` 后以 `done` 收尾。SSE 模式每 15s（可配）发送 `: ping` 心跳。
 
+#### 终态语义（`done`）
+
+| 字段 | 说明 |
+|------|------|
+| `status` | `success`：完整；`partial`：已输出部分记录后失败；`failed`：未输出记录即失败 |
+| `complete` | `true` 表示结果完整；`false` 表示被截断或失败 |
+| `stop_reason` | `exhausted`（正常耗尽）、`record_limit`（达到 `max_records`）、`byte_limit`（达到字节预算）或具体错误 kind |
+| `returned` | 服务端已成功写入的记录数 |
+| `truncated` | 仅表示记录/字节预算截断；失败请判断 `status`/`complete` |
+| `cursor` | 可续传游标（仅单集群 raw 且未截断完时提供） |
+| `bytes` | 已写出字节数 |
+
 #### 额外请求参数
 
 | 参数 | 适用 | 说明 |
 |------|------|------|
-| `page_size` | raw | 单页大小，默认 `TAP_STREAM_PAGE_SIZE` |
+| `page_size` | raw | 单页大小，默认 `TAP_STREAM_PAGE_SIZE`，上限 `TAP_MAX_SIZE` |
 | `window_buckets` | timeseries | 单窗最大桶数，默认 `TAP_STREAM_WINDOW_BUCKETS` |
-| `max_records` | 两者 | 本次流总量软上限，默认 `TAP_STREAM_MAX_RECORDS` |
+| `max_records` | 两者 | 本次流总量上限，取值不会超过服务端 `TAP_STREAM_MAX_RECORDS` |
 | `format` | 两者 | `ndjson`（默认）/ `sse` |
+| `cursor` | raw | 续传游标；与查询参数、签名和有效期绑定，过期返回 `410 cursor_expired` |
+
+#### 断点续传
+
+- 仅 `/data/raw/stream` 单集群支持；游标同时出现在 `records` 与 `done` 消息的 `id` 字段。
+- SSE 客户端重连时自动携带 `Last-Event-ID`，服务端会读取并作为 `cursor` 处理；NDJSON 客户端需手动回传 `cursor` 参数。
+- 续传使用同一 PIT 快照（有效期受 PIT lease 控制），重复发送最后一批是允许的，客户端应按记录去重。
+- `complete=true` 且带 `cursor` 的流，携带该 `cursor` 以 SSE 重连时返回 `204 No Content`（用于停止浏览器无限重连）；NDJSON 无需处理。
 
 #### 合规性说明
 
 - 非流式 `/data/timeseries` 预估桶数超过 `TAP_MAX_ES_BUCKETS` 时返回 `400 too_many_buckets`，请改用 `/data/timeseries/stream`。
 - 并发流超过 `TAP_MAX_CONCURRENT_STREAMS` 时返回 `429 too_many_requests`。
-- 流式端点响应为消息流，不是 `{code,message,data}` 信封。
+- 流开始前的参数/集群/校验错误按普通 JSON `{code,message}` 返回对应 HTTP 状态码；一旦开始输出，错误只能通过 `error` + `done` 在流内传递。
+- 单流输出超过 `TAP_STREAM_MAX_BYTES` 时停止并发送 `error kind=byte_limit`。
+- 多集群 raw 流采用严格模式：任一集群失败即终止整个流并给出 `error`/`done`，不会静默返回不完整数据。
 
 #### 示例
 
@@ -388,6 +411,9 @@ curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&full_range
 # SSE 流式时序数据
 curl -N -H "Accept: text/event-stream" \
   "http://localhost:8080/data/timeseries/stream?cluster=sz01&job=172.0&metric=cpu&interval=1s&from=now-7d"
+
+# 断点续传（cursor 来自上一条 records/done 的 id 字段）
+curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&from=now-1h&cursor=<cursor>"
 ```
 
 ---

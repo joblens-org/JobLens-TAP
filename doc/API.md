@@ -15,6 +15,7 @@
   - [1. Health Check](#1-health-check)
   - [2. Raw Data Query](#2-raw-data-query)
   - [3. Time-Series Query](#3-time-series-query)
+  - [3.1 Streaming Queries (Very Large Results)](#31-streaming-queries-very-large-results)
   - [4. Job Summary Query](#4-job-summary-query)
   - [5. Schema Discovery](#5-schema-discovery)
   - [6. Job Data Existence Check](#6-job-data-existence-check)
@@ -348,14 +349,14 @@ GET /data/timeseries
 
 ### 3.1 Streaming Queries (Very Large Results)
 
-For very large queries, TAP shards server-side (raw: `search_after` paging; timeseries: time-window slicing) and pushes results incrementally. Peak memory is independent of the total result size.
+For very large queries, TAP shards server-side (raw: PIT + `search_after` paging; timeseries: bucket-aligned time windows) and pushes results incrementally. Memory is bounded by page/window size, not by total result size.
 
 #### Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/data/raw/stream` | Raw streaming, multi-cluster k-way merge, globally time-descending |
-| GET | `/data/timeseries/stream` | Time-series streaming, time-window sharded, single cluster only |
+| GET | `/data/raw/stream` | Raw streaming, multi-cluster k-way merge, globally time-descending; single-cluster resumable |
+| GET | `/data/timeseries/stream` | Time-series streaming, bucket-aligned windows, single cluster only, not resumable |
 
 #### Transport
 
@@ -367,27 +368,49 @@ For very large queries, TAP shards server-side (raw: `search_after` paging; time
 
 ```json
 {"type":"meta","data":{...}}
-{"type":"records","data":{"records":[...],"returned":100,"window":{"from":"...","to":"..."}}}
-{"type":"done","data":{"returned":1000,"duration_ms":1234,"truncated":false,"stats":{...}}}
+{"type":"records","id":"<cursor>","data":{"records":[...],"returned":100,"window":{"from":"...","to":"..."}}}
+{"type":"done","id":"<cursor>","data":{"status":"success","complete":true,"stop_reason":"exhausted","returned":1000,"duration_ms":1234,"truncated":false,"stats":{...}}}
 {"type":"error","data":{"code":400,"kind":"too_many_buckets","message":"..."}}
 ```
 
 Order: `meta` (once) → `records` (many) → `done` (once). On mid-stream failure an `error` is sent before `done`. SSE sends `: ping` heartbeats every 15s (configurable).
 
+#### Terminal semantics (`done`)
+
+| Field | Description |
+|-------|-------------|
+| `status` | `success` complete; `partial` failed after emitting records; `failed` failed before emitting records |
+| `complete` | `true` only when the result is complete |
+| `stop_reason` | `exhausted`, `record_limit`, `byte_limit`, or the concrete error kind |
+| `returned` | Records successfully written by the server |
+| `truncated` | Record/byte budget truncation only; use `status`/`complete` for failures |
+| `cursor` | Resume cursor (single-cluster raw, only while more data remains) |
+| `bytes` | Bytes written to the client |
+
 #### Additional parameters
 
 | Parameter | Applies to | Description |
 |-----------|-----------|-------------|
-| `page_size` | raw | Page size, default `TAP_STREAM_PAGE_SIZE` |
+| `page_size` | raw | Page size, default `TAP_STREAM_PAGE_SIZE`, capped by `TAP_MAX_SIZE` |
 | `window_buckets` | timeseries | Max buckets per window, default `TAP_STREAM_WINDOW_BUCKETS` |
-| `max_records` | both | Soft cap of records per request, default `TAP_STREAM_MAX_RECORDS` |
+| `max_records` | both | Record cap per stream; client values can only lower the server limit `TAP_STREAM_MAX_RECORDS` |
 | `format` | both | `ndjson` (default) / `sse` |
+| `cursor` | raw | Resume cursor bound to the original query, signature and expiry; expired returns `410 cursor_expired` |
+
+#### Resumption
+
+- `/data/raw/stream` only, single cluster. The cursor is emitted as the `id` of `records`/`done` messages.
+- SSE clients resend it automatically via `Last-Event-ID`; NDJSON clients pass it back as the `cursor` parameter.
+- Resume reuses the same PIT snapshot (bounded by the PIT lease). Re-delivering the last batch is allowed; clients should deduplicate by record identity.
+- For a stream with `complete=true` and a `cursor`, replaying that cursor over SSE returns `204 No Content` so browsers stop reconnecting; NDJSON clients do not need this.
 
 #### Notes
 
 - Non-streaming `/data/timeseries` returns `400 too_many_buckets` when the estimated bucket count exceeds `TAP_MAX_ES_BUCKETS`; use `/data/timeseries/stream` instead.
 - Concurrent streams are capped by `TAP_MAX_CONCURRENT_STREAMS`; excess returns `429 too_many_requests`.
-- Streaming endpoints return a message stream, not the `{code,message,data}` envelope.
+- Pre-stream validation errors return the regular JSON `{code,message}` envelope with the matching HTTP status; after streaming starts, errors are in-band `error` + `done` messages.
+- A stream stops with `error kind=byte_limit` after `TAP_STREAM_MAX_BYTES` of output.
+- Multi-cluster raw streams are strict: any failing cluster terminates the whole stream with `error`/`done` instead of silently returning incomplete data.
 
 #### Examples
 
@@ -398,6 +421,9 @@ curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&full_range
 # SSE time-series stream
 curl -N -H "Accept: text/event-stream" \
   "http://localhost:8080/data/timeseries/stream?cluster=sz01&job=172.0&metric=cpu&interval=1s&from=now-7d"
+
+# Resume (cursor from the previous records/done id)
+curl -N "http://localhost:8080/data/raw/stream?cluster=sz01&job=172.0&from=now-1h&cursor=<cursor>"
 ```
 
 ---
