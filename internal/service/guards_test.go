@@ -78,37 +78,15 @@ func TestWindowDateBuckets(t *testing.T) {
 	}
 }
 
-func TestSplitTimeWindows(t *testing.T) {
-	from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	to := from.Add(10 * time.Minute)
-	windows := splitTimeWindows(from, to, 3*time.Minute)
-	if len(windows) != 4 {
-		t.Fatalf("splitTimeWindows count = %d, want 4", len(windows))
+func TestMetricStateWeightedMerge(t *testing.T) {
+	state := &metricState{}
+	state.merge(map[string]any{"count": float64(1), "sum": float64(100), "max": float64(100)})
+	state.merge(map[string]any{"count": float64(99), "sum": float64(0), "max": float64(0)})
+	if state.count != 100 || state.sum != 100 || state.max != 100 {
+		t.Fatalf("state = %+v, want count=100 sum=100 max=100", state)
 	}
-	if !windows[0].from.Equal(from) || !windows[0].to.Equal(from.Add(3*time.Minute)) {
-		t.Errorf("window[0] = %v..%v", windows[0].from, windows[0].to)
-	}
-	last := windows[len(windows)-1]
-	if !last.to.Equal(to) {
-		t.Errorf("last window end = %v, want %v", last.to, to)
-	}
-}
-
-func TestTSAccumulator(t *testing.T) {
-	a := &tsAccumulator{}
-	a.add(2)
-	a.add(4)
-	a.add(0)
-	st := a.stats()
-	if st.GlobalMax != 4 {
-		t.Errorf("GlobalMax = %v, want 4", st.GlobalMax)
-	}
-	if st.GlobalAvg != 2 {
-		t.Errorf("GlobalAvg = %v, want 2", st.GlobalAvg)
-	}
-	empty := (&tsAccumulator{}).stats()
-	if empty.GlobalAvg != 0 || empty.GlobalMax != 0 {
-		t.Errorf("empty accumulator = %+v", empty)
+	if got := state.sum / state.count; got != 1 {
+		t.Fatalf("weighted avg = %v, want 1", got)
 	}
 }
 
