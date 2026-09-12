@@ -63,7 +63,7 @@ func rawHit(id, ts string) map[string]any {
 		"_id":    id,
 		"_index": "cpumem_collector_2026.01.01",
 		"_score": 1,
-		"sort":   []any{ts},
+		"sort":   []any{ts, id},
 		"_source": map[string]any{
 			"hostname":   "h1",
 			"@timestamp": ts,
@@ -83,6 +83,11 @@ func TestStreamRawPagingAndMerge(t *testing.T) {
 			return
 		}
 		if !strings.HasSuffix(r.URL.Path, "_search") {
+			if strings.HasSuffix(r.URL.Path, "_pit") {
+				writeESProduct(w)
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": "test-pit", "succeeded": true})
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
@@ -170,7 +175,7 @@ func TestStreamTimeSeriesWindowed(t *testing.T) {
 						{"key_as_string": "2026-01-01T00:01:00Z", "key": 2, "doc_count": 1, "avg_cpu": map[string]any{"value": 0.7}},
 					},
 				},
-				"stats_cpu": map[string]any{"count": 10, "min": 0.1, "max": 0.9, "avg": 0.6, "std_deviation": 0.1},
+				"stats_cpu": map[string]any{"count": 10, "sum": 6.0, "min": 0.1, "max": 0.9, "avg": 0.6, "std_deviation": 0.1},
 			},
 		})
 	}))
@@ -197,7 +202,7 @@ func TestStreamTimeSeriesWindowed(t *testing.T) {
 	if done.Returned != 2 || len(records) != 2 {
 		t.Fatalf("returned=%d len=%d, want 2", done.Returned, len(records))
 	}
-	if st, ok := done.Stats["cpu"]; !ok || st.GlobalMax != 0.7 {
+	if st, ok := done.Stats["cpu"]; !ok || st.GlobalMax != 0.9 || st.GlobalAvg != 0.6 {
 		t.Errorf("stats = %+v", done.Stats)
 	}
 }
