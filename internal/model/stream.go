@@ -73,10 +73,16 @@ type StreamRecords struct {
 
 // StreamDone 流结束汇总
 type StreamDone struct {
-	Returned   int                         `json:"returned"`
-	DurationMs int64                       `json:"duration_ms"`
-	Truncated  bool                        `json:"truncated"`
-	Stats      map[string]*TimeSeriesStats `json:"stats,omitempty"`
+	Status         string                      `json:"status"`
+	Complete       bool                        `json:"complete"`
+	StopReason     string                      `json:"stop_reason"`
+	Cursor         string                      `json:"cursor,omitempty"`
+	FailedClusters []string                    `json:"failed_clusters,omitempty"`
+	Bytes          int64                       `json:"bytes"`
+	Returned       int                         `json:"returned"`
+	DurationMs     int64                       `json:"duration_ms"`
+	Truncated      bool                        `json:"truncated"`
+	Stats          map[string]*TimeSeriesStats `json:"stats,omitempty"`
 }
 
 // StreamError 流中途错误
