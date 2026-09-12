@@ -31,6 +31,12 @@ type Config struct {
 	MaxFlattenFields     int           `env:"TAP_MAX_FLATTEN_FIELDS" envDefault:"2000"`   // 单条记录扁平化最大键数
 
 	// 流式查询（Phase 1/2）
+	StreamCursorKey     string        `env:"TAP_STREAM_CURSOR_KEY"`
+	StreamMaxBytes      int64         `env:"TAP_STREAM_MAX_BYTES" envDefault:"67108864"`
+	StreamPageMaxBytes  int64         `env:"TAP_STREAM_PAGE_MAX_BYTES" envDefault:"8388608"`
+	StreamMaxClusters   int           `env:"TAP_STREAM_MAX_CLUSTERS" envDefault:"16"`
+	StreamPITKeepAlive  time.Duration `env:"TAP_STREAM_PIT_KEEP_ALIVE" envDefault:"2m"`
+	StreamWriteTimeout  time.Duration `env:"TAP_STREAM_WRITE_TIMEOUT" envDefault:"30s"`
 	StreamPageSize      int           `env:"TAP_STREAM_PAGE_SIZE" envDefault:"500"`       // raw 流单页大小
 	StreamWindowBuckets int           `env:"TAP_STREAM_WINDOW_BUCKETS" envDefault:"5000"` // 时序流单窗最大桶数
 	StreamMaxRecords    int           `env:"TAP_STREAM_MAX_RECORDS" envDefault:"100000"`  // 流式总量软上限
@@ -108,6 +114,21 @@ func Load() (*Config, error) {
 
 // Normalize 将未设置（零值）的护栏参数填充为内置默认值
 func (c *Config) Normalize() {
+	if c.StreamMaxBytes <= 0 {
+		c.StreamMaxBytes = 64 << 20
+	}
+	if c.StreamPageMaxBytes <= 0 {
+		c.StreamPageMaxBytes = 8 << 20
+	}
+	if c.StreamMaxClusters <= 0 {
+		c.StreamMaxClusters = 16
+	}
+	if c.StreamPITKeepAlive <= 0 {
+		c.StreamPITKeepAlive = 2 * time.Minute
+	}
+	if c.StreamWriteTimeout <= 0 {
+		c.StreamWriteTimeout = 30 * time.Second
+	}
 	if c.MaxSize <= 0 {
 		c.MaxSize = 10000
 	}

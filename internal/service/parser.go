@@ -133,8 +133,8 @@ func (s *ParserService) ParseInterval(input string) (time.Duration, error) {
 	}
 
 	if d, err := time.ParseDuration(input); err == nil {
-		if d <= 0 {
-			return 0, fmt.Errorf("interval must be positive: %s", input)
+		if d < time.Millisecond || d%time.Millisecond != 0 {
+			return 0, fmt.Errorf("interval must be a positive whole number of milliseconds: %s", input)
 		}
 		return d, nil
 	}
@@ -144,8 +144,8 @@ func (s *ParserService) ParseInterval(input string) (time.Duration, error) {
 	if matches == nil {
 		return 0, fmt.Errorf("invalid interval format: %s", input)
 	}
-	value, _ := strconv.Atoi(matches[1])
-	if value <= 0 {
+	value, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil || value <= 0 {
 		return 0, fmt.Errorf("interval must be positive: %s", input)
 	}
 
@@ -155,6 +155,9 @@ func (s *ParserService) ParseInterval(input string) (time.Duration, error) {
 		multiplier = 24 * time.Hour
 	case "w":
 		multiplier = 7 * 24 * time.Hour
+	}
+	if value > int64((1<<63-1)/multiplier) {
+		return 0, fmt.Errorf("interval overflows duration: %s", input)
 	}
 	return time.Duration(value) * multiplier, nil
 }
