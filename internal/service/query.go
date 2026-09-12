@@ -77,8 +77,8 @@ func (s *QueryService) BuildRawQuery(req *model.RawQueryRequest, from, to time.T
 		{
 			"range": map[string]any{
 				"@timestamp": map[string]any{
-					"gte": from.Format(time.RFC3339),
-					"lte": to.Format(time.RFC3339),
+					"gte": from.Format(time.RFC3339Nano),
+					"lte": to.Format(time.RFC3339Nano),
 				},
 			},
 		},
@@ -460,7 +460,7 @@ func (s *QueryService) ExecuteMultiClusterQuery(ctx context.Context, clusterIDs 
 
 	// 如果所有查询都失败
 	if len(allResults) == 0 && len(errors) > 0 {
-		return nil, nil, fmt.Errorf("all cluster queries failed: %v", errors)
+		return nil, nil, fmt.Errorf("all cluster queries failed: %w", errors[0])
 	}
 
 	// 记录错误但不中断
