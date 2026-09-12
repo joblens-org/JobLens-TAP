@@ -157,6 +157,7 @@ func (c *ESClient) Ping(ctx context.Context) error {
 
 // SearchResult ES 搜索结果
 type SearchResult struct {
+	PITID        string
 	Took         int64
 	TimedOut     bool
 	Total        int64
@@ -175,7 +176,7 @@ type SearchHit struct {
 }
 
 // Search 执行 ES 搜索查询
-func (c *ESClient) Search(ctx context.Context, indices []string, query map[string]any, routing string) (*SearchResult, error) {
+func (c *ESClient) Search(ctx context.Context, indices []string, query map[string]any, routing string, maxBytes ...int64) (*SearchResult, error) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return nil, fmt.Errorf("encode query: %w", err)
@@ -230,8 +231,29 @@ func (c *ESClient) Search(ctx context.Context, indices []string, query map[strin
 	}
 
 	var r map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+	var reader io.Reader = resp.Body
+	if len(maxBytes) > 0 && maxBytes[0] > 0 {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes[0]+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(body)) > maxBytes[0] {
+			return nil, &SearchError{Status: 413, Kind: "response_too_large"}
+		}
+		reader = bytes.NewReader(body)
+	}
+	if err := json.NewDecoder(reader).Decode(&r); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	if len(maxBytes) > 0 {
+		if timedOut, _ := r["timed_out"].(bool); timedOut {
+			return nil, &SearchError{Status: 504, Kind: "query_timeout"}
+		}
+		if shards, ok := r["_shards"].(map[string]any); ok {
+			if failed, _ := shards["failed"].(float64); failed > 0 {
+				return nil, &SearchError{Status: 502, Kind: "partial_search"}
+			}
+		}
 	}
 
 	// 打印原始响应摘要，便于排查空结果问题
