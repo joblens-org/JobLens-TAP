@@ -214,26 +214,29 @@ echo "OK: jq validation passed"
 | `fields` | 否 | 字段白名单 |
 | `flatten` | 否 | 默认 `false`（流式默认不摊平） |
 | `full_range` | 否 | `true` 自动发现作业全时段 |
-| `page_size` | 否 | 单页大小，默认服务端配置 |
-| `max_records` | 否 | 本次流总量软上限 |
+| `page_size` | 否 | 单页大小，默认服务端配置，上限 `TAP_MAX_SIZE` |
+| `max_records` | 否 | 本次流总量上限，只能调低服务端硬上限 |
 | `format` | 否 | `ndjson`（默认）/ `sse` |
+| `cursor` | 否 | 续传游标（仅单集群），过期返回 `410 cursor_expired` |
 
-**输出**：每行一个 JSON（NDJSON），`type` 依次为 `meta` → `records`（多次）→ `done`；错误为 `error`。示例：
+**输出**：每行一个 JSON（NDJSON），`type` 依次为 `meta` → `records`（多次）→ `done`；错误为 `error`。`done.data` 含 `status/complete/stop_reason/returned/truncated/cursor`，判断完整性请以 `complete` 为准。单集群流可通过 `records`/`done` 的 `id` 字段回传 `cursor` 续传（SSE 自动携带 `Last-Event-ID`）。示例：
 ```bash
 curl -N "[BASE_URL]/data/raw/stream?cluster=htcondor01&job=172.0&full_range=true&page_size=500"
 ```
 
 ## GET /data/timeseries/stream —— 时序数据流式（长时段/细粒度）
 
-当 `/data/timeseries` 因桶数超限返回 `too_many_buckets` 时改用本端点，TAP 按时间窗分片，逐窗推送；全局 `stats` 在 `done` 中给出。
+当 `/data/timeseries` 因桶数超限返回 `too_many_buckets` 时改用本端点，TAP 按桶对齐时间窗分片（窗口不重叠），逐窗推送；全局 `stats` 在 `done` 中给出，跨窗按 `sum/count` 加权合并，与非流式口径一致。
 
-参数同 `/data/timeseries`，另支持 `window_buckets`、`max_records`、`format`。示例：
+参数同 `/data/timeseries`，另支持 `window_buckets`、`max_records`、`format`；本端点仅单集群且不支持续传。示例：
 ```bash
 curl -N -H "Accept: text/event-stream" \
   "[BASE_URL]/data/timeseries/stream?cluster=htcondor01&job=172.0&metric=cpu&interval=1s&from=now-7d"
 ```
 
-> 流式端点返回的不是 `{code,message,data}` 信封，而是 NDJSON/SSE 消息流；解析时按行读取并识别 `type` 字段。
+> 流式端点开始输出后返回的不是 `{code,message,data}` 信封，而是 NDJSON/SSE 消息流；解析时按行读取并识别 `type` 字段。开始输出前的参数/校验错误仍返回普通 JSON 信封。
+
+> 分组流式（`by=host` 等）若分组数超过服务端 terms 上限（100），返回 `422 group_limit`，不会静默截断。
 
 ## GET /data/summary —— 任务摘要
 

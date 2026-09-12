@@ -151,8 +151,14 @@ curl -X POST "http://localhost:8080/collect" \
 | `TAP_MAX_FLATTEN_FIELDS` | 否 | `2000` | 单条记录扁平化最大键数 |
 | `TAP_STREAM_PAGE_SIZE` | 否 | `500` | raw 流单页大小 |
 | `TAP_STREAM_WINDOW_BUCKETS` | 否 | `5000` | 时序流单窗最大桶数 |
-| `TAP_STREAM_MAX_RECORDS` | 否 | `100000` | 流式单请求记录数软上限 |
+| `TAP_STREAM_MAX_RECORDS` | 否 | `100000` | 流式单请求记录数硬上限（客户端 `max_records` 只能调低） |
 | `TAP_STREAM_MAX_WINDOWS` | 否 | `2000` | 时序流最大时间窗数 |
+| `TAP_STREAM_MAX_BYTES` | 否 | `67108864` | 单流最大输出字节数 |
+| `TAP_STREAM_PAGE_MAX_BYTES` | 否 | `8388608` | 单次 ES 响应解码字节上限 |
+| `TAP_STREAM_MAX_CLUSTERS` | 否 | `16` | 单次流式查询最大集群数 |
+| `TAP_STREAM_PIT_KEEP_ALIVE` | 否 | `2m` | 快照分页/续传的 PIT 租约 |
+| `TAP_STREAM_WRITE_TIMEOUT` | 否 | `30s` | 流式响应的每次写入截止时间刷新 |
+| `TAP_STREAM_CURSOR_KEY` | 否 | 随机 | 续传游标 HMAC 密钥（需跨重启续传时设置为固定值） |
 | `TAP_STREAM_TIMEOUT` | 否 | `10m` | 单个流的整体超时 |
 | `TAP_SSE_HEARTBEAT` | 否 | `15s` | SSE 心跳间隔 |
 | `TAP_COLLECTOR_REGISTRY_PATH` | 推荐 | - | 采集器注册文件路径（JSON），支持 SIGHUP 热重载 |

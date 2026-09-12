@@ -151,8 +151,14 @@ All configuration is loaded via environment variables — no config files requir
 | `TAP_MAX_FLATTEN_FIELDS` | No | `2000` | Max flattened keys per raw record |
 | `TAP_STREAM_PAGE_SIZE` | No | `500` | Raw stream page size |
 | `TAP_STREAM_WINDOW_BUCKETS` | No | `5000` | Max buckets per time window in timeseries stream |
-| `TAP_STREAM_MAX_RECORDS` | No | `100000` | Soft cap of records streamed per request |
+| `TAP_STREAM_MAX_RECORDS` | No | `100000` | Hard cap of records streamed per request (client `max_records` can only lower it) |
 | `TAP_STREAM_MAX_WINDOWS` | No | `2000` | Max time windows for timeseries stream |
+| `TAP_STREAM_MAX_BYTES` | No | `67108864` | Max bytes written per stream |
+| `TAP_STREAM_PAGE_MAX_BYTES` | No | `8388608` | Max decoded bytes per single ES response |
+| `TAP_STREAM_MAX_CLUSTERS` | No | `16` | Max clusters per streaming query |
+| `TAP_STREAM_PIT_KEEP_ALIVE` | No | `2m` | PIT keep-alive lease used for snapshot paging/resume |
+| `TAP_STREAM_WRITE_TIMEOUT` | No | `30s` | Per-write deadline refresh for streaming responses |
+| `TAP_STREAM_CURSOR_KEY` | No | random | HMAC key for resume cursors (set a stable value to resume across restarts) |
 | `TAP_STREAM_TIMEOUT` | No | `10m` | Overall timeout of a stream |
 | `TAP_SSE_HEARTBEAT` | No | `15s` | SSE heartbeat interval |
 | `TAP_COLLECTOR_REGISTRY_PATH` | Recommended | - | Path to collector registry JSON file, supports SIGHUP hot-reload |
