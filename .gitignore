@@ -28,3 +28,6 @@ Thumbs.db
 # opencode
 .opencode/*
 .omo/
+
+# 本地测试报告/压测产物（不提交）
+reports/
