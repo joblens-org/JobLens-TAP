@@ -25,7 +25,9 @@ func (it *rawStreamIter) ensurePIT(ctx context.Context) error {
 	query["pit"] = map[string]any{"id": it.pitID, "keep_alive": intervalToES(it.svc.cfg.StreamPITKeepAlive)}
 	query["track_total_hits"] = false
 	qctx, cancel := it.svc.queryCtx(ctx)
+	tEsStart := time.Now()
 	result, err := it.client.SearchPIT(qctx, query, it.svc.cfg.StreamPageMaxBytes)
+	tEs := time.Since(tEsStart)
 	cancel()
 	if err != nil {
 		var se *repository.SearchError
@@ -38,7 +40,16 @@ func (it *rawStreamIter) ensurePIT(ctx context.Context) error {
 		it.pitID = result.PITID
 	}
 	it.leaseUntil = it.svc.parserSvc.nowFn().Add(it.svc.cfg.StreamPITKeepAlive)
+	tFlStart := time.Now()
 	it.buffer = FlattenHits(result.Hits, it.plan.clusterName, it.req.Flatten, it.svc.cfg.Registry, it.svc.cfg.MaxFlattenFields)
+	tFl := time.Since(tFlStart)
+	slog.Info("PERF page",
+		"cluster", it.id,
+		"es_ms", tEs.Milliseconds(),
+		"flatten_ms", tFl.Milliseconds(),
+		"raw_bytes", result.RawBytes,
+		"hits", len(result.Hits),
+	)
 	it.sorts = make([][]any, len(result.Hits))
 	for i, hit := range result.Hits {
 		if len(hit.Sort) != 2 {

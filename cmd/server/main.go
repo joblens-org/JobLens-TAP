@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -147,6 +148,13 @@ func main() {
 	}()
 
 	slog.Info("server started", "addr", srv.Addr)
+
+	if pprofAddr := os.Getenv("TAP_PPROF_ADDR"); pprofAddr != "" {
+		go func() {
+			slog.Info("pprof listening", "addr", pprofAddr)
+			_ = http.ListenAndServe(pprofAddr, nil)
+		}()
+	}
 
 	// SIGHUP 热重载采集器注册文件
 	if cfg.CollectorRegistryPath != "" {

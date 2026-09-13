@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -73,10 +74,12 @@ func (c *ESClient) SearchPIT(ctx context.Context, query map[string]any, maxBytes
 	if err != nil {
 		return nil, err
 	}
+	t0 := time.Now()
 	resp, err := c.client.Search(c.client.Search.WithContext(ctx), c.client.Search.WithBody(bytes.NewReader(body)), c.client.Search.WithAllowPartialSearchResults(false))
 	if err != nil {
 		return nil, err
 	}
+	tHTTP := time.Since(t0)
 	defer resp.Body.Close()
 	if resp.IsError() {
 		return nil, &SearchError{Status: resp.StatusCode, Kind: "search_failed"}
@@ -85,6 +88,7 @@ func (c *ESClient) SearchPIT(ctx context.Context, query map[string]any, maxBytes
 	if err != nil {
 		return nil, err
 	}
+	tBody := time.Since(t0)
 	if int64(len(data)) > maxBytes {
 		return nil, &SearchError{Status: 413, Kind: "response_too_large"}
 	}
@@ -103,16 +107,26 @@ func (c *ESClient) SearchPIT(ctx context.Context, query map[string]any, maxBytes
 			} `json:"hits"`
 		} `json:"hits"`
 	}
+	tUnmarshalStart := time.Since(t0)
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return nil, err
 	}
+	tUnmarshal := time.Since(t0)
+	slog.Info("PERF pit",
+		"cluster", c.clusterName,
+		"bytes", len(data),
+		"http_ms", tHTTP.Milliseconds(),
+		"body_ms", (tBody - tHTTP).Milliseconds(),
+		"unmarshal_ms", (tUnmarshal - tUnmarshalStart).Milliseconds(),
+		"hits", len(wire.Hits.Hits),
+	)
 	if wire.TimedOut {
 		return nil, &SearchError{Status: 504, Kind: "query_timeout"}
 	}
 	if wire.Shards.Failed > 0 {
 		return nil, &SearchError{Status: 502, Kind: "partial_search"}
 	}
-	result := &SearchResult{PITID: wire.PITID}
+	result := &SearchResult{PITID: wire.PITID, RawBytes: int64(len(data))}
 	for _, h := range wire.Hits.Hits {
 		sort := make([]any, len(h.Sort))
 		for i, v := range h.Sort {

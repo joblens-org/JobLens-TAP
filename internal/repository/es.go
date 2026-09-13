@@ -164,6 +164,7 @@ type SearchResult struct {
 	MaxScore     float64
 	Hits         []SearchHit
 	Aggregations map[string]any
+	RawBytes     int64
 }
 
 // SearchHit 单条搜索结果

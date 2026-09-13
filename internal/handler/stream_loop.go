@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -24,10 +26,29 @@ type streamResult struct {
 }
 
 type streamProgress struct {
-	returned int
-	bytes    int64
-	cursor   string
-	started  time.Time
+	returned  int
+	bytes     int64
+	cursor    string
+	started   time.Time
+	messages  int
+	marshalNs int64
+	writeNs   int64
+}
+
+func selfMemoryKB() (rss string, hwm string) {
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		switch {
+		case strings.HasPrefix(line, "VmRSS:"):
+			rss = strings.TrimSpace(strings.TrimPrefix(line, "VmRSS:"))
+		case strings.HasPrefix(line, "VmHWM:"):
+			hwm = strings.TrimSpace(strings.TrimPrefix(line, "VmHWM:"))
+		}
+	}
+	return rss, hwm
 }
 
 func (h *StreamHandler) runStream(c *gin.Context, format string, run func(context.Context, service.EmitFunc) (*model.StreamDone, error)) {
@@ -77,12 +98,17 @@ func (h *StreamHandler) runStream(c *gin.Context, format string, run func(contex
 		select {
 		case emission := <-emissions:
 			msg := emission.message
+			tMarshal := time.Now()
 			data, err := json.Marshal(msg)
+			progress.marshalNs += time.Since(tMarshal).Nanoseconds()
+			progress.messages++
 			if err == nil && progress.bytes+int64(len(data))+1 > h.cfg.StreamMaxBytes {
 				err = service.NewQueryError(413, "byte_limit", "stream byte budget exhausted")
 			}
 			if err == nil {
+				tWrite := time.Now()
 				err = write(msg)
+				progress.writeNs += time.Since(tWrite).Nanoseconds()
 			}
 			if err == nil {
 				progress.bytes += int64(len(data)) + 1
@@ -161,6 +187,19 @@ func (h *StreamHandler) endStream(c *gin.Context, sw *streamWriter, result strea
 	}
 	result.done.Returned, result.done.Bytes = progress.returned, progress.bytes
 	result.done.DurationMs = time.Since(progress.started).Milliseconds()
+	rss, hwm := selfMemoryKB()
+	slog.Info("PERF stream",
+		"returned", progress.returned,
+		"messages", progress.messages,
+		"bytes", progress.bytes,
+		"marshal_ms", progress.marshalNs/1e6,
+		"write_ms", progress.writeNs/1e6,
+		"duration_ms", result.done.DurationMs,
+		"status", result.done.Status,
+		"stop_reason", result.done.StopReason,
+		"vm_rss_kb", rss,
+		"vm_hwm_kb", hwm,
+	)
 	if result.done.Cursor == "" && !result.done.Complete {
 		result.done.Cursor = progress.cursor
 	}
