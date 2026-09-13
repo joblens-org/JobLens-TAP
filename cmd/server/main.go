@@ -113,6 +113,7 @@ func main() {
 	{
 		api.GET("/raw", rawHandler.Query)
 		api.GET("/raw/stream", streamHandler.Raw)
+		api.POST("/raw/stream", streamHandler.Raw)
 		api.GET("/timeseries", timeseriesHandler.Query)
 		api.GET("/timeseries/stream", streamHandler.TimeSeries)
 		api.GET("/summary", summaryHandler.Query)

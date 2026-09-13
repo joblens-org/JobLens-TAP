@@ -43,8 +43,7 @@ func streamErrorFrom(err error) model.StreamError {
 // Raw GET /data/raw/stream
 func (h *StreamHandler) Raw(c *gin.Context) {
 	var req model.RawStreamRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		respondBadRequest(c, service.ErrKindInvalidRequest, "invalid request: "+err.Error())
+	if !bindRawStream(c, &req) {
 		return
 	}
 	if req.To == "" {
