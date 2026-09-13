@@ -111,13 +111,16 @@ func (s *StreamService) StreamRaw(ctx context.Context, req *model.RawStreamReque
 			continue
 		}
 		it := &rawStreamIter{svc: q, plan: plan, client: client, req: rawReq, id: id, hash: rawStreamHash(req), signer: s.signer, resumable: len(clusterIDs) == 1}
-		if resume != nil {
+		switch {
+		case plan.empty:
+			it.done = true
+		case resume != nil:
 			it.pitID = resume.PIT
 			it.leaseUntil = resume.Expires
 			for _, v := range resume.After {
 				it.searchAfter = append(it.searchAfter, v)
 			}
-		} else {
+		default:
 			qctx, cancel := q.queryCtx(ctx)
 			it.pitID, err = client.OpenPIT(qctx, plan.indices, plan.routing, q.cfg.StreamPITKeepAlive)
 			cancel()

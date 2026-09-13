@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -143,6 +144,18 @@ func (s *QueryService) queryCtx(ctx context.Context) (context.Context, context.C
 	return context.WithTimeout(ctx, s.cfg.QueryTimeout)
 }
 
+// NoDataError 表示作业在目标采集器索引中没有任何数据。
+// full_range 查询把它当作成功的空结果（HTTP 200 / 空流），而不是服务端错误，
+// 这样共享可用性检查不会因为某个采集器（如 GPU）从未采集而整体失败。
+type NoDataError struct {
+	Job     string
+	Cluster string
+}
+
+func (e *NoDataError) Error() string {
+	return fmt.Sprintf("no data found for job %s in cluster %s", e.Job, e.Cluster)
+}
+
 // DiscoverJobTimeRange 通过 ES 聚合发现 Job 的完整时间范围
 func (s *QueryService) DiscoverJobTimeRange(ctx context.Context, clusterName string, req *model.RawQueryRequest, jobFilters []map[string]any) (time.Time, time.Time, error) {
 	esClient, info, err := s.esManager.GetClientForCluster(clusterName)
@@ -206,7 +219,7 @@ func (s *QueryService) DiscoverJobTimeRange(ctx context.Context, clusterName str
 	}
 
 	if firstTime.IsZero() || lastTime.IsZero() {
-		return time.Time{}, time.Time{}, fmt.Errorf("no data found for job %s in cluster %s", req.Job, clusterName)
+		return time.Time{}, time.Time{}, &NoDataError{Job: req.Job, Cluster: clusterName}
 	}
 
 	slog.Debug("[DiscoverJobTimeRange] discovered",
@@ -237,6 +250,7 @@ type rawQueryPlan struct {
 	from        time.Time
 	to          time.Time
 	jobFilters  []map[string]any
+	empty       bool
 }
 
 // buildRawPlan 解析集群、时间范围、字段与索引，供单页查询与流式分页复用
@@ -269,10 +283,15 @@ func (s *QueryService) buildRawPlan(ctx context.Context, clusterRef string, req 
 	cn = clusterInfo.Name
 
 	var from, to time.Time
+	empty := false
 	if req.FullRange {
 		from, to, err = s.DiscoverJobTimeRange(ctx, cn, req, jobFilters)
 		if err != nil {
-			return nil, nil, fmt.Errorf("discover time range: %w", err)
+			var noData *NoDataError
+			if !errors.As(err, &noData) {
+				return nil, nil, fmt.Errorf("discover time range: %w", err)
+			}
+			empty = true
 		}
 	} else {
 		from, err = s.parserSvc.ParseTime(req.From)
@@ -313,6 +332,7 @@ func (s *QueryService) buildRawPlan(ctx context.Context, clusterRef string, req 
 		from:        from,
 		to:          to,
 		jobFilters:  jobFilters,
+		empty:       empty,
 	}, esClient, nil
 }
 
@@ -333,6 +353,14 @@ func (s *QueryService) ExecuteRawQuery(ctx context.Context, clusterName string, 
 
 // executeRawPage 使用已构建的计划执行单页查询，供流式分页复用（避免每页重复发现时间范围）
 func (s *QueryService) executeRawPage(ctx context.Context, plan *rawQueryPlan, esClient *repository.ESClient, req *model.RawQueryRequest, searchAfter []any) (*model.RawQueryResponse, error) {
+	if plan.empty {
+		return &model.RawQueryResponse{
+			Records:         []model.Record{},
+			IndicesResolved: plan.indices,
+			Pagination:      &model.Pagination{Returned: 0, Total: 0, HasMore: false},
+		}, nil
+	}
+
 	query := s.BuildRawQuery(req, plan.from, plan.to, searchAfter, plan.fields, plan.clusterName, plan.clusterTag, plan.jobFilters)
 
 	slog.Debug("[ExecuteRawQuery] entry",
