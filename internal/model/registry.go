@@ -18,11 +18,12 @@ type RegistryFile struct {
 
 // CollectorEntry 单个采集器定义
 type CollectorEntry struct {
-	Name         string       `json:"name"`                   // 采集器名（如 "gpu"）
-	Description  string       `json:"description,omitempty"`  // 描述
-	IndexPattern string       `json:"index_pattern,omitempty"` // 索引模式，默认 "{collector}_collector_{date}"
-	AgentName    string       `json:"agent_name,omitempty"`   // 节点侧采集器实例名（/collect 的 Lens 传递），默认等于 name
-	Aliases      []FieldAlias `json:"aliases,omitempty"`      // 该采集器专属别名
+	Name           string       `json:"name"`                       // 采集器名（如 "gpu"）
+	Description    string       `json:"description,omitempty"`      // 描述
+	IndexPattern   string       `json:"index_pattern,omitempty"`    // 索引模式，默认 "{collector}_collector_{date}"
+	AgentName      string       `json:"agent_name,omitempty"`       // 节点侧采集器实例名（/collect 的 Lens 传递），默认等于 name
+	StreamPageSize int          `json:"stream_page_size,omitempty"` // 推荐的流式单页大小（0=未配置，回退全局默认）
+	Aliases        []FieldAlias `json:"aliases,omitempty"`          // 该采集器专属别名
 }
 
 // FieldAlias 字段别名
@@ -77,11 +78,13 @@ func staticDefault() *CollectorRegistry {
 	entries := []struct {
 		name      string
 		agentName string
+		pageSize  int
 		aliases   []FieldAlias
 	}{
 		{
 			name:      "cpumem",
 			agentName: "cpumem_collector",
+			pageSize:  2000,
 			aliases: []FieldAlias{
 				{Alias: "cpu", ESField: "data.summary.cpuPercent", Type: "float", SummaryAgg: "extended_stats", RecordField: "cpu"},
 				{Alias: "mem", ESField: "data.summary.mem_rss_kb", Type: "long", SummaryAgg: "extended_stats", RecordField: "mem"},
@@ -93,6 +96,7 @@ func staticDefault() *CollectorRegistry {
 			// 旧版 IO 采集器，仅用于历史数据查询（新作业请使用 new_io_usage）
 			name:      "io",
 			agentName: "io_collector",
+			pageSize:  2000,
 			aliases: []FieldAlias{
 				{Alias: "io_legacy", ESField: "data.summary.read_bytes", Type: "long", Description: "旧版io累计读字节（历史数据）"},
 			},
@@ -100,6 +104,7 @@ func staticDefault() *CollectorRegistry {
 		{
 			name:      "new_io_usage",
 			agentName: "new_io_usage_collector",
+			pageSize:  256,
 			aliases: []FieldAlias{
 				{Alias: "io_bytes", ESField: "data.job_total.rchar", Type: "long", SummaryAgg: "sum", RecordField: "io_bytes", Description: "job累计读字节"},
 				{Alias: "io_write_bytes", ESField: "data.job_total.wchar", Type: "long", SummaryAgg: "sum"},
@@ -114,6 +119,7 @@ func staticDefault() *CollectorRegistry {
 		{
 			name:      "fs_metadata",
 			agentName: "fs_metadata_collector",
+			pageSize:  4,
 			aliases: []FieldAlias{
 				{Alias: "metadata_ops", ESField: "data.job_metadata_ops_rate", Type: "float", SummaryAgg: "max"},
 				{Alias: "metadata_ops_total", ESField: "data.job_metadata_ops_total", Type: "long", SummaryAgg: "sum"},
@@ -122,14 +128,16 @@ func staticDefault() *CollectorRegistry {
 		{
 			name:      "net",
 			agentName: "net_collector",
+			pageSize:  2000,
 		},
 	}
 
 	for _, e := range entries {
 		ce := &CollectorEntry{
-			Name:         e.name,
-			AgentName:    e.agentName,
-			IndexPattern: defaultIndexPattern,
+			Name:           e.name,
+			AgentName:      e.agentName,
+			IndexPattern:   defaultIndexPattern,
+			StreamPageSize: e.pageSize,
 		}
 		r.collectors[e.name] = ce
 		for _, fa := range e.aliases {
@@ -206,13 +214,17 @@ func LoadRegistry(path string) (*CollectorRegistry, error) {
 		if agentName == "" {
 			agentName = name
 		}
+		if entry.StreamPageSize < 0 {
+			return nil, fmt.Errorf("采集器 %s 的 stream_page_size 不能为负", name)
+		}
 
 		ce := &CollectorEntry{
-			Name:         name,
-			Description:  entry.Description,
-			IndexPattern: pattern,
-			AgentName:    agentName,
-			Aliases:      entry.Aliases,
+			Name:           name,
+			Description:    entry.Description,
+			IndexPattern:   pattern,
+			AgentName:      agentName,
+			StreamPageSize: entry.StreamPageSize,
+			Aliases:        entry.Aliases,
 		}
 		r.collectors[name] = ce
 
@@ -444,6 +456,17 @@ func (r *CollectorRegistry) GetIndexPattern(collector string) string {
 		return defaultIndexPattern
 	}
 	return ce.IndexPattern
+}
+
+// GetStreamPageSize 获取采集器推荐的流式页大小（0 表示未配置）
+func (r *CollectorRegistry) GetStreamPageSize(collector string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ce, ok := r.collectors[collector]
+	if !ok {
+		return 0
+	}
+	return ce.StreamPageSize
 }
 
 // RenderIndexName 根据采集器和日期渲染索引名称

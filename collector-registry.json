@@ -5,6 +5,7 @@
       "name": "cpumem",
       "description": "CPU和内存采集器",
       "agent_name": "cpumem_collector",
+      "stream_page_size": 2000,
       "aliases": [
         {"alias": "cpu",      "es_field": "data.summary.cpuPercent",     "type": "float",   "summary_agg": "extended_stats", "record_field": "cpu"},
         {"alias": "mem",      "es_field": "data.summary.mem_rss_kb",     "type": "long",    "summary_agg": "extended_stats", "record_field": "mem"},
@@ -16,6 +17,7 @@
       "name": "io",
       "description": "旧版IO采集器（仅历史数据查询，新作业使用 new_io_usage）",
       "agent_name": "io_collector",
+      "stream_page_size": 2000,
       "aliases": [
         {"alias": "io_legacy", "es_field": "data.summary.read_bytes", "type": "long", "description": "旧版io累计读字节（历史数据）"}
       ]
@@ -24,6 +26,7 @@
       "name": "new_io_usage",
       "description": "新版IO采集器（eBPF job级聚合 + 延迟分布）",
       "agent_name": "new_io_usage_collector",
+      "stream_page_size": 256,
       "aliases": [
         {"alias": "io_bytes",       "es_field": "data.job_total.rchar",       "type": "long",  "summary_agg": "sum", "record_field": "io_bytes", "description": "job累计读字节"},
         {"alias": "io_write_bytes", "es_field": "data.job_total.wchar",       "type": "long",  "summary_agg": "sum"},
@@ -39,6 +42,7 @@
       "name": "fs_metadata",
       "description": "文件系统元数据操作采集器（eBPF，含延迟分布）",
       "agent_name": "fs_metadata_collector",
+      "stream_page_size": 4,
       "aliases": [
         {"alias": "metadata_ops",       "es_field": "data.job_metadata_ops_rate",  "type": "float", "summary_agg": "max"},
         {"alias": "metadata_ops_total", "es_field": "data.job_metadata_ops_total", "type": "long",  "summary_agg": "sum"}
@@ -46,11 +50,13 @@
     },
     {
       "name": "net",
-      "description": "网络采集器"
+      "description": "网络采集器",
+      "stream_page_size": 2000
     },
     {
       "name": "gpu",
-      "description": "GPU采集器"
+      "description": "GPU采集器",
+      "stream_page_size": 2000
     }
   ],
   "global_aliases": [

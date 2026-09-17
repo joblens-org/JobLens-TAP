@@ -117,11 +117,12 @@ type ClusterInfo struct {
 
 // CollectorInfo 采集器详细信息（来自 Registry）
 type CollectorInfo struct {
-	Name         string       `json:"name"`
-	Description  string       `json:"description"`
-	IndexPattern string       `json:"index_pattern"`
-	AgentName    string       `json:"agent_name,omitempty"` // 节点侧实例名（/collect 的 Lens 传递）
-	Aliases      []FieldAlias `json:"aliases"`
+	Name           string       `json:"name"`
+	Description    string       `json:"description"`
+	IndexPattern   string       `json:"index_pattern"`
+	AgentName      string       `json:"agent_name,omitempty"`       // 节点侧实例名（/collect 的 Lens 传递）
+	StreamPageSize int          `json:"stream_page_size,omitempty"` // 推荐的流式单页大小（0=未配置）
+	Aliases        []FieldAlias `json:"aliases"`
 }
 
 // TriggerCollectionResponse 触发采集响应

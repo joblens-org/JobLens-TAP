@@ -64,11 +64,12 @@ func (h *SchemaHandler) Get(c *gin.Context) {
 	collectors := make([]model.CollectorInfo, 0, len(registryCollectors))
 	for _, ce := range registryCollectors {
 		collectors = append(collectors, model.CollectorInfo{
-			Name:         ce.Name,
-			Description:  ce.Description,
-			IndexPattern: ce.IndexPattern,
-			AgentName:    ce.AgentName,
-			Aliases:      ce.Aliases,
+			Name:           ce.Name,
+			Description:    ce.Description,
+			IndexPattern:   ce.IndexPattern,
+			AgentName:      ce.AgentName,
+			StreamPageSize: ce.StreamPageSize,
+			Aliases:        ce.Aliases,
 		})
 	}
 
