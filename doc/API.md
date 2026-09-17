@@ -391,7 +391,7 @@ Order: `meta` (once) → `records` (many) → `done` (once). On mid-stream failu
 
 | Parameter | Applies to | Description |
 |-----------|-----------|-------------|
-| `page_size` | raw | Page size, default `TAP_STREAM_PAGE_SIZE`, capped by `TAP_MAX_SIZE` |
+| `page_size` | raw | Page size: `auto`/omitted negotiates the collector's recommended value (see `/schema` `stream_page_size`); a positive integer is honored, capped by `TAP_MAX_SIZE` |
 | `window_buckets` | timeseries | Max buckets per window, default `TAP_STREAM_WINDOW_BUCKETS` |
 | `max_records` | both | Record cap per stream; client values can only lower the server limit `TAP_STREAM_MAX_RECORDS` |
 | `format` | both | `ndjson` (default) / `sse` |

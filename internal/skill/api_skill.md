@@ -214,7 +214,7 @@ echo "OK: jq validation passed"
 | `fields` | 否 | 字段白名单 |
 | `flatten` | 否 | 默认 `false`（流式默认不摊平） |
 | `full_range` | 否 | `true` 自动发现作业全时段 |
-| `page_size` | 否 | 单页大小，默认服务端配置，上限 `TAP_MAX_SIZE` |
+| `page_size` | 否 | 单页大小：`auto`/缺省按采集器推荐值协商（`/schema` 的 `stream_page_size`）；传正整数则尊重该值，上限 `TAP_MAX_SIZE` |
 | `max_records` | 否 | 本次流总量上限，只能调低服务端硬上限 |
 | `format` | 否 | `ndjson`（默认）/ `sse` |
 | `cursor` | 否 | 续传游标（仅单集群），过期返回 `410 cursor_expired` |

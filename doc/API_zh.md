@@ -381,7 +381,7 @@ GET /data/timeseries
 
 | 参数 | 适用 | 说明 |
 |------|------|------|
-| `page_size` | raw | 单页大小，默认 `TAP_STREAM_PAGE_SIZE`，上限 `TAP_MAX_SIZE` |
+| `page_size` | raw | 单页大小：`auto`/缺省时按采集器推荐值协商（见 `/schema` 的 `stream_page_size`）；传正整数则尊重该值，上限 `TAP_MAX_SIZE` |
 | `window_buckets` | timeseries | 单窗最大桶数，默认 `TAP_STREAM_WINDOW_BUCKETS` |
 | `max_records` | 两者 | 本次流总量上限，取值不会超过服务端 `TAP_STREAM_MAX_RECORDS` |
 | `format` | 两者 | `ndjson`（默认）/ `sse` |
