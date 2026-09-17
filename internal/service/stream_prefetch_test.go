@@ -61,7 +61,7 @@ func TestStreamRawPrefetchesNextPage(t *testing.T) {
 	_, ssvc := newQueryServiceForTest(t, es.URL)
 
 	req := &model.RawStreamRequest{
-		Cluster: "c1", Job: "1", From: "now-1h", To: "now", PageSize: 1,
+		Cluster: "c1", Job: "1", From: "now-1h", To: "now", PageSize: "1",
 	}
 	emit := func(msg model.StreamMessage) error {
 		if msg.Type == model.StreamTypeRecords {

@@ -33,9 +33,9 @@ func (s *StreamService) StreamRaw(ctx context.Context, req *model.RawStreamReque
 	q := s.q
 	started := time.Now()
 
-	pageSize := req.PageSize
-	if pageSize <= 0 {
-		pageSize = q.cfg.StreamPageSize
+	pageSize, err := s.resolveStreamPageSize(req)
+	if err != nil {
+		return nil, err
 	}
 	if q.cfg.MaxSize > 0 && pageSize > q.cfg.MaxSize {
 		pageSize = q.cfg.MaxSize

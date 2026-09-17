@@ -121,7 +121,7 @@ func TestStreamRawPagingAndMerge(t *testing.T) {
 	_, ssvc := newQueryServiceForTest(t, es.URL)
 
 	req := &model.RawStreamRequest{
-		Cluster: "c1", Job: "1", From: "now-1h", To: "now", PageSize: 2,
+		Cluster: "c1", Job: "1", From: "now-1h", To: "now", PageSize: "2",
 	}
 	var records []model.Record
 	emit := func(msg model.StreamMessage) error {

@@ -21,7 +21,7 @@ type RawStreamRequest struct {
 	Fields     string `form:"fields"`
 	Flatten    bool   `form:"flatten" default:"false"`
 	FullRange  bool   `form:"full_range" default:"false"`
-	PageSize   int    `form:"page_size"`
+	PageSize   string `form:"page_size"`
 	MaxRecords int    `form:"max_records"`
 	Format     string `form:"format"`
 	Cursor     string `form:"cursor"`

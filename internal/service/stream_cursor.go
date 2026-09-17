@@ -31,7 +31,7 @@ type rawResumeCursor struct {
 func rawStreamHash(req *model.RawStreamRequest) string {
 	copy := *req
 	copy.Cursor, copy.Format = "", ""
-	copy.MaxRecords, copy.PageSize = 0, 0
+	copy.MaxRecords, copy.PageSize = 0, ""
 	data, err := json.Marshal(copy)
 	if err != nil {
 		return ""

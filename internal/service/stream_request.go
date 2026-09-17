@@ -13,7 +13,7 @@ func (s *StreamService) normalizeRaw(req *model.RawStreamRequest) (*model.RawStr
 	if copy.To == "" {
 		copy.To = "now"
 	}
-	if copy.PageSize < 0 || copy.MaxRecords < 0 {
+	if copy.MaxRecords < 0 {
 		return nil, NewQueryError(400, ErrKindInvalidRequest, "record limits must not be negative")
 	}
 	if copy.Cluster == "" || copy.Job == "" {
@@ -23,6 +23,36 @@ func (s *StreamService) normalizeRaw(req *model.RawStreamRequest) (*model.RawStr
 		return nil, NewQueryError(400, ErrKindInvalidRequest, "from is required")
 	}
 	return &copy, nil
+}
+
+func (s *StreamService) resolveStreamPageSize(req *model.RawStreamRequest) (int, error) {
+	raw := strings.TrimSpace(req.PageSize)
+	if raw == "" || strings.EqualFold(raw, "auto") {
+		return s.recommendedPageSize(req.Collector), nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, NewQueryError(400, ErrKindInvalidRequest, "page_size must be a positive integer or \"auto\"")
+	}
+	return n, nil
+}
+
+func (s *StreamService) recommendedPageSize(collector string) int {
+	best := 0
+	for _, name := range strings.Split(collector, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		ps := s.q.cfg.Registry.GetStreamPageSize(name)
+		if ps > 0 && (best == 0 || ps < best) {
+			best = ps
+		}
+	}
+	if best > 0 {
+		return best
+	}
+	return s.q.cfg.StreamPageSize
 }
 
 func (s *StreamService) parseStreamRange(fromText, toText string) (time.Time, time.Time, error) {
