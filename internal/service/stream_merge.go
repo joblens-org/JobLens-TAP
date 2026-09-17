@@ -29,6 +29,10 @@ type rawStreamIter struct {
 	signer          cursorSigner
 	leaseUntil      time.Time
 	resumable       bool
+
+	prefetchCh chan *pitPage
+	fetching   bool
+	pending    *pitPage
 }
 
 func (it *rawStreamIter) hasHead() bool {
