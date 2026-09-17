@@ -88,9 +88,12 @@ func (h *StreamHandler) runStream(c *gin.Context, format string, run func(contex
 	started := time.Now()
 	var sw *streamWriter
 	progress := streamProgress{started: started}
-	write := func(msg model.StreamMessage) error {
+	write := func(msg model.StreamMessage, encoded []byte) error {
 		if sw == nil {
 			sw = h.beginStream(c, format)
+		}
+		if format == model.StreamFormatNDJSON && encoded != nil {
+			return sw.writeEncoded(encoded)
 		}
 		return sw.write(msg)
 	}
@@ -107,7 +110,7 @@ func (h *StreamHandler) runStream(c *gin.Context, format string, run func(contex
 			}
 			if err == nil {
 				tWrite := time.Now()
-				err = write(msg)
+				err = write(msg, data)
 				progress.writeNs += time.Since(tWrite).Nanoseconds()
 			}
 			if err == nil {

@@ -50,6 +50,24 @@ func (sw *streamWriter) write(msg model.StreamMessage) error {
 	return nil
 }
 
+func (sw *streamWriter) writeEncoded(data []byte) error {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if sw.failed {
+		return errStreamClosed
+	}
+	if err := setStreamDeadline(sw.c, sw.writeTimeout); err != nil {
+		sw.failed = true
+		return err
+	}
+	if _, err := sw.c.Writer.Write(append(data, '\n')); err != nil {
+		sw.failed = true
+		return err
+	}
+	sw.c.Writer.Flush()
+	return nil
+}
+
 func (sw *streamWriter) writeSSE(msg model.StreamMessage) error {
 	payload, err := json.Marshal(msg.Data)
 	if err != nil {
